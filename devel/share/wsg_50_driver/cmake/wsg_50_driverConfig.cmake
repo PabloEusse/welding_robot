@@ -1,0 +1,1 @@
+/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_driver/share/wsg_50_driver/cmake/wsg_50_driverConfig.cmake

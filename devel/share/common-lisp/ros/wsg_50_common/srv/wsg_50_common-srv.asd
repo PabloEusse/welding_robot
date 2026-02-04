@@ -1,0 +1,1 @@
+/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_common/share/common-lisp/ros/wsg_50_common/srv/wsg_50_common-srv.asd

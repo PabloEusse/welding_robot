@@ -1,0 +1,19 @@
+[01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:[m[K In function ‘[01m[Kint main(int, char**)[m[K’:
+[01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:34:5:[m[K [01;31m[Kerror: [m[K‘[01m[KVector6d[m[K’ was not declared in this scope; did you mean ‘[01m[KTum::Vector6d[m[K’?
+   34 |     [01;31m[KVector6d[m[K tau;
+      |     [01;31m[K^~~~~~~~[m[K
+      |     [32m[KTum::Vector6d[m[K
+In file included from [01m[K/opt/ros/noetic/include/tum_ics_ur_robot_lli/JointState.h:11[m[K,
+                 from [01m[K/opt/ros/noetic/include/tum_ics_ur_robot_lli/RobotControllers/Controller.h:14[m[K,
+                 from [01m[K/opt/ros/noetic/include/tum_ics_ur_robot_lli/Robot/RobotArmConstrained.h:4[m[K,
+                 from [01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:1[m[K:
+[01m[K/usr/include/tumtools/Math/EigenDefs.h:15:35:[m[K [01;36m[Knote: [m[K‘[01m[KTum::Vector6d[m[K’ declared here
+   15 | typedef Eigen::Matrix<double,6,1> [01;36m[KVector6d[m[K;
+      |                                   [01;36m[K^~~~~~~~[m[K
+[01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:35:5:[m[K [01;31m[Kerror: [m[K‘[01m[Ktau[m[K’ was not declared in this scope; did you mean ‘[01m[Ktan[m[K’?
+   35 |     [01;31m[Ktau[m[K << 2.0, 2.0, 1.0, 1.0, 0.5, 0.5;  // Small test torques in Nm
+      |     [01;31m[K^~~[m[K
+      |     [32m[Ktan[m[K
+make[2]: *** [CMakeFiles/simple_effort_controller_node.dir/build.make:76: CMakeFiles/simple_effort_controller_node.dir/src/applications/simple_effort_controller_node.cpp.o] Error 1
+make[1]: *** [CMakeFiles/Makefile2:1897: CMakeFiles/simple_effort_controller_node.dir/all] Error 2
+make: *** [Makefile:146: all] Error 2

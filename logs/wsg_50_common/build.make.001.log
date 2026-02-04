@@ -1,0 +1,16 @@
+[  0%] Built target std_msgs_generate_messages_py
+[  0%] Built target std_msgs_generate_messages_cpp
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Move
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Cmd
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Conf
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Incr
+[  0%] Built target std_msgs_generate_messages_eus
+[  0%] Built target std_msgs_generate_messages_nodejs
+[  0%] Built target std_msgs_generate_messages_lisp
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Status
+[ 25%] Built target wsg_50_common_generate_messages_cpp
+[ 42%] Built target wsg_50_common_generate_messages_py
+[ 64%] Built target wsg_50_common_generate_messages_eus
+[ 82%] Built target wsg_50_common_generate_messages_lisp
+[100%] Built target wsg_50_common_generate_messages_nodejs
+[100%] Built target wsg_50_common_generate_messages

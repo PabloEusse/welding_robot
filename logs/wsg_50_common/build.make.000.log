@@ -1,0 +1,44 @@
+[  0%] Built target std_msgs_generate_messages_cpp
+[  0%] Built target std_msgs_generate_messages_py
+[  0%] Built target std_msgs_generate_messages_eus
+[  0%] Built target std_msgs_generate_messages_lisp
+[  0%] Built target std_msgs_generate_messages_nodejs
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Move
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Incr
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Cmd
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Status
+[  0%] Built target _wsg_50_common_generate_messages_check_deps_Conf
+[ 10%] [34m[1mGenerating Lisp code from wsg_50_common/Status.msg[0m
+[ 10%] [34m[1mGenerating Lisp code from wsg_50_common/Cmd.msg[0m
+[ 21%] [34m[1mGenerating C++ code from wsg_50_common/Status.msg[0m
+[ 21%] [34m[1mGenerating Python from MSG wsg_50_common/Status[0m
+[ 21%] [34m[1mGenerating C++ code from wsg_50_common/Cmd.msg[0m
+[ 28%] [34m[1mGenerating Javascript code from wsg_50_common/Cmd.msg[0m
+[ 28%] [34m[1mGenerating EusLisp code from wsg_50_common/Cmd.msg[0m
+[ 28%] [34m[1mGenerating Python from MSG wsg_50_common/Cmd[0m
+[ 32%] [34m[1mGenerating Python code from SRV wsg_50_common/Conf[0m
+[ 35%] [34m[1mGenerating Javascript code from wsg_50_common/Status.msg[0m
+[ 39%] [34m[1mGenerating Lisp code from wsg_50_common/Conf.srv[0m
+[ 42%] [34m[1mGenerating EusLisp code from wsg_50_common/Status.msg[0m
+[ 46%] [34m[1mGenerating Javascript code from wsg_50_common/Conf.srv[0m
+[ 50%] [34m[1mGenerating Lisp code from wsg_50_common/Incr.srv[0m
+[ 53%] [34m[1mGenerating EusLisp code from wsg_50_common/Conf.srv[0m
+[ 57%] [34m[1mGenerating Javascript code from wsg_50_common/Incr.srv[0m
+[ 60%] [34m[1mGenerating C++ code from wsg_50_common/Conf.srv[0m
+[ 64%] [34m[1mGenerating EusLisp code from wsg_50_common/Incr.srv[0m
+[ 67%] [34m[1mGenerating Lisp code from wsg_50_common/Move.srv[0m
+[ 71%] [34m[1mGenerating Javascript code from wsg_50_common/Move.srv[0m
+[ 75%] [34m[1mGenerating Python code from SRV wsg_50_common/Incr[0m
+[ 78%] [34m[1mGenerating Python code from SRV wsg_50_common/Move[0m
+[ 78%] Built target wsg_50_common_generate_messages_nodejs
+[ 82%] [34m[1mGenerating EusLisp manifest code for wsg_50_common[0m
+[ 85%] [34m[1mGenerating EusLisp code from wsg_50_common/Move.srv[0m
+[ 85%] Built target wsg_50_common_generate_messages_lisp
+[ 89%] [34m[1mGenerating C++ code from wsg_50_common/Incr.srv[0m
+[ 92%] [34m[1mGenerating C++ code from wsg_50_common/Move.srv[0m
+[100%] [34m[1mGenerating Python srv __init__.py for wsg_50_common[0m
+[100%] [34m[1mGenerating Python msg __init__.py for wsg_50_common[0m
+[100%] Built target wsg_50_common_generate_messages_cpp
+[100%] Built target wsg_50_common_generate_messages_py
+[100%] Built target wsg_50_common_generate_messages_eus
+[100%] Built target wsg_50_common_generate_messages

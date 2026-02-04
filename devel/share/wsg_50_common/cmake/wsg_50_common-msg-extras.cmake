@@ -1,0 +1,1 @@
+/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_common/share/wsg_50_common/cmake/wsg_50_common-msg-extras.cmake

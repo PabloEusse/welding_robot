@@ -1,0 +1,27 @@
+In file included from [01m[K/opt/ros/noetic/include/ros/ros.h:40[m[K,
+                 from [01m[K/opt/ros/noetic/include/tum_ics_ur_robot_lli/RobotTime.h:10[m[K,
+                 from [01m[K/opt/ros/noetic/include/tum_ics_ur_robot_lli/RobotControllers/Controller.h:15[m[K,
+                 from [01m[K/opt/ros/noetic/include/tum_ics_ur_robot_lli/Robot/RobotArmConstrained.h:4[m[K,
+                 from [01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:1[m[K:
+[01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:[m[K In function ‘[01m[Kint main(int, char**)[m[K’:
+[01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:35:38:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass tum_ics_ur_robot_lli::Robot::RobotArmConstrained[m[K’ has no member named ‘[01m[KgetTau[m[K’
+   35 |     ROS_INFO_STREAM("Tau: " << robot.[01;31m[KgetTau[m[K());
+      |                                      [01;31m[K^~~~~~[m[K
+[01m[K/opt/ros/noetic/include/ros/console.h:361:64:[m[K [01;36m[Knote: [m[Kin definition of macro ‘[01m[KROSCONSOLE_PRINT_STREAM_AT_LOCATION_WITH_FILTER[m[K’
+  361 |     __rosconsole_print_stream_at_location_with_filter__ss__ << [01;36m[Kargs[m[K; \
+      |                                                                [01;36m[K^~~~[m[K
+[01m[K/opt/ros/noetic/include/ros/console.h:409:7:[m[K [01;36m[Knote: [m[Kin expansion of macro ‘[01m[KROSCONSOLE_PRINT_STREAM_AT_LOCATION[m[K’
+  409 |       [01;36m[KROSCONSOLE_PRINT_STREAM_AT_LOCATION[m[K(args); \
+      |       [01;36m[K^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[m[K
+[01m[K/opt/ros/noetic/include/ros/console.h:582:43:[m[K [01;36m[Knote: [m[Kin expansion of macro ‘[01m[KROS_LOG_STREAM_COND[m[K’
+  582 | #define ROS_LOG_STREAM(level, name, args) [01;36m[KROS_LOG_STREAM_COND[m[K(true, level, name, args)
+      |                                           [01;36m[K^~~~~~~~~~~~~~~~~~~[m[K
+[01m[K/opt/ros/noetic/include/rosconsole/macros_generated.h:111:31:[m[K [01;36m[Knote: [m[Kin expansion of macro ‘[01m[KROS_LOG_STREAM[m[K’
+  111 | #define ROS_INFO_STREAM(args) [01;36m[KROS_LOG_STREAM[m[K(::ros::console::levels::Info, ROSCONSOLE_DEFAULT_NAME, args)
+      |                               [01;36m[K^~~~~~~~~~~~~~[m[K
+[01m[K/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_controller_tutorial/src/applications/simple_effort_controller_node.cpp:35:5:[m[K [01;36m[Knote: [m[Kin expansion of macro ‘[01m[KROS_INFO_STREAM[m[K’
+   35 |     [01;36m[KROS_INFO_STREAM[m[K("Tau: " << robot.getTau());
+      |     [01;36m[K^~~~~~~~~~~~~~~[m[K
+make[2]: *** [CMakeFiles/simple_effort_controller_node.dir/build.make:76: CMakeFiles/simple_effort_controller_node.dir/src/applications/simple_effort_controller_node.cpp.o] Error 1
+make[1]: *** [CMakeFiles/Makefile2:1897: CMakeFiles/simple_effort_controller_node.dir/all] Error 2
+make: *** [Makefile:146: all] Error 2

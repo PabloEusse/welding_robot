@@ -1,0 +1,1 @@
+/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_driver/lib/pkgconfig/wsg_50_driver.pc

@@ -1,0 +1,13 @@
+[  0%] Built target wsg_50_common_generate_messages_cpp
+[ 18%] [32mBuilding CXX object CMakeFiles/wsg_50_ip.dir/src/main.cpp.o[0m
+[ 27%] [32mBuilding C object CMakeFiles/wsg_50_ip.dir/src/cmd.c.o[0m
+[ 54%] [32mBuilding CXX object CMakeFiles/wsg_50_ip.dir/src/interface.cpp.o[0m
+[ 45%] [32mBuilding CXX object CMakeFiles/wsg_50_ip.dir/src/functions.cpp.o[0m
+[ 63%] [32mBuilding C object CMakeFiles/wsg_50_ip.dir/src/msg.c.o[0m
+[ 27%] [32mBuilding CXX object CMakeFiles/wsg_50_ip.dir/src/checksum.cpp.o[0m
+[ 36%] [32mBuilding CXX object CMakeFiles/wsg_50_ip.dir/src/common.cpp.o[0m
+[ 72%] [32mBuilding C object CMakeFiles/wsg_50_ip.dir/src/serial.c.o[0m
+[ 81%] [32mBuilding C object CMakeFiles/wsg_50_ip.dir/src/tcp.c.o[0m
+[ 90%] [32mBuilding C object CMakeFiles/wsg_50_ip.dir/src/udp.c.o[0m
+[100%] [32m[1mLinking CXX executable /home/msbrdm_student/ur10_ws/devel/.private/wsg_50_driver/lib/wsg_50_driver/wsg_50_ip[0m
+[100%] Built target wsg_50_ip
