@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<launch>
+
+	<arg name="load_robot_description" default="true"/>
+	<arg name="joint_limited" default="false"/>
+  <arg name="robot_prefix" default="ursa"/>
+  <arg name="gui" default="false"/>
+  <arg name="list" default="[$(arg robot_prefix)_joint_states]"/>
+
+  <!-- The name of the parameter under which the URDF is loaded -->
+  <arg name="robot_description" default="robot_description"/>
+
+  <!-- Load universal robot description format (URDF) -->
+  <group if="$(arg load_robot_description)">
+    <param name="$(arg robot_description)" command="$(find xacro)/xacro --inorder '$(find ursa_apps)/launch/configs/robot/ur5_robot.urdf.xacro' prefix:=$(arg robot_prefix)_ limited:=$(arg joint_limited)" />
+  </group>
+
+  <!-- loading the Home position for the UR5 robot -->
+  <rosparam command="load" file="$(find ursa_apps)/launch/configs/robot/ur5_zeros.yaml"/>
+  
+  <!-- joinstate -->
+  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher" >
+    <param name="use_gui" value="$(arg gui)"/>
+    <rosparam unless="$(arg gui)" param="source_list" subst_value="True">$(arg list)</rosparam>
+  </node>
+
+  <!-- robotstate -->
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find ursa_apps)/launch/configs/robot_ur5.rviz" />
+
+</launch>
