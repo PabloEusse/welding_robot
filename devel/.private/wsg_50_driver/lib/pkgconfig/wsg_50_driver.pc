@@ -1,8 +1,0 @@
-prefix=/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_driver
-
-Name: wsg_50_driver
-Description: Description of wsg_50_driver
-Version: 0.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: roscpp std_msgs std_srvs wsg_50_common

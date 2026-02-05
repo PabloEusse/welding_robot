@@ -1,1 +1,0 @@
-/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_common/share/gennodejs/ros/wsg_50_common/srv/Move.js

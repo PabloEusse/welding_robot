@@ -179,7 +179,12 @@ class UR10Model3DOF:
         self.T_1_w_fn = sym.lambdify(self.sym_q, self.T_1_w)
         self.T_ee_0_fn = sym.lambdify(self.sym_q, self.T_ee_0)
         self.T_ee_w_fn = sym.lambdify(self.sym_q, self.T_ee_w)
+
+        # print("check if translation depends on q6", sym.simplify(self.T_6_w[:3,3].diff(self.q[5])))
+        # print("check if rotation depends on q6", sym.simplify(self.T_6_w[:3,:3].diff(self.q[5])))
+
         print("kinematics done")
+
     def jacobians(self) -> None:
         """Symbolic analysis of Jacobians
         """

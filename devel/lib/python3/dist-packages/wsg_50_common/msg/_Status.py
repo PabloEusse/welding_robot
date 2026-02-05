@@ -1,1 +1,0 @@
-/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_common/lib/python3/dist-packages/wsg_50_common/msg/_Status.py

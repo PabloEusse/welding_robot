@@ -2,8 +2,7 @@ authors: []
 blacklist: []
 build_space: build
 catkin_make_args: []
-cmake_args:
-- -DTUM_ICS_USE_QT5=1
+cmake_args: []
 devel_layout: linked
 devel_space: devel
 extend_path: null

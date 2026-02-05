@@ -3,7 +3,7 @@ import numpy as np
 
 from ur10_model.ur10_model_3dof import UR10Model3DOF
 from ur10_robot.ur10_robot_3dof import UR10Robot3DOF
-from ur10_controllers.ur10_operational_space_controller import SpaceController
+from ur10_controllers.ur10_operational_space_controller_6dof import SpaceController
 #the main drawback I can think is the assumption that we have a perfect model of the robot and we know all the parameters beforehand.
 #A different drawback I found is that the controller is not as intuitive to understand as a normal PD/PID controller which can make tuning harder
 def main():

@@ -1,1 +1,0 @@
-/home/msbrdm_student/ur10_ws/devel/.private/wsg_50_common/include/wsg_50_common/ConfResponse.h

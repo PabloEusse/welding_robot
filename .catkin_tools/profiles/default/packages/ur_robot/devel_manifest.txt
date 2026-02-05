@@ -1,0 +1,6 @@
+ur_robot
+/home/msbrdm_student/Desktop/welding_robot/devel/.private/ur_robot/cmake.lock /home/msbrdm_student/Desktop/welding_robot/devel/./cmake.lock
+/home/msbrdm_student/Desktop/welding_robot/devel/.private/ur_robot/lib/pkgconfig/ur_robot.pc /home/msbrdm_student/Desktop/welding_robot/devel/lib/pkgconfig/ur_robot.pc
+/home/msbrdm_student/Desktop/welding_robot/devel/.private/ur_robot/lib/python3/dist-packages/ur10_robot/__init__.py /home/msbrdm_student/Desktop/welding_robot/devel/lib/python3/dist-packages/ur10_robot/__init__.py
+/home/msbrdm_student/Desktop/welding_robot/devel/.private/ur_robot/share/ur_robot/cmake/ur_robotConfig.cmake /home/msbrdm_student/Desktop/welding_robot/devel/share/ur_robot/cmake/ur_robotConfig.cmake
+/home/msbrdm_student/Desktop/welding_robot/devel/.private/ur_robot/share/ur_robot/cmake/ur_robotConfig-version.cmake /home/msbrdm_student/Desktop/welding_robot/devel/share/ur_robot/cmake/ur_robotConfig-version.cmake

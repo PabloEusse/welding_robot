@@ -1,2 +1,0 @@
-set(wsg_50_common_MESSAGE_FILES "/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_robot/wsg_50_common/msg/Cmd.msg;/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_robot/wsg_50_common/msg/Status.msg")
-set(wsg_50_common_SERVICE_FILES "/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_robot/wsg_50_common/srv/Conf.srv;/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_robot/wsg_50_common/srv/Incr.srv;/home/msbrdm_student/ur10_ws/src/tum_ics_ur10_robot/wsg_50_common/srv/Move.srv")
