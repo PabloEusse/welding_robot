@@ -1,0 +1,8 @@
+prefix=/home/pablo/Desktop/welding_robot/simulation/devel
+
+Name: ur_robot
+Description: Description of ur_robot
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

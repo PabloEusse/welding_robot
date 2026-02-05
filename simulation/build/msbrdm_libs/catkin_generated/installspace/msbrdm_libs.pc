@@ -1,0 +1,8 @@
+prefix=/home/pablo/Desktop/welding_robot/simulation/install
+
+Name: msbrdm_libs
+Description: Description of msbrdm_libs
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
