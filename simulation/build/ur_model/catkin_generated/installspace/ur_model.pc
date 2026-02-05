@@ -1,8 +1,0 @@
-prefix=/home/pablo/Desktop/welding_robot/simulation/install
-
-Name: ur_model
-Description: Description of ur_model
-Version: 0.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: 

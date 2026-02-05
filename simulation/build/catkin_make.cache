@@ -1,2 +1,0 @@
-msbrdm_libs:robot_descriptions/ur_robot/ur_description:robot_descriptions/ur_robot/ursa_apps:ur_model:ur_robot
--DCATKIN_DEVEL_PREFIX=/home/pablo/Desktop/welding_robot/simulation/devel -DCMAKE_INSTALL_PREFIX=/home/pablo/Desktop/welding_robot/simulation/install -G Unix Makefiles

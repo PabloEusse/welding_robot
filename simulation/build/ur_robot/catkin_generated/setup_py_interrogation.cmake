@@ -1,7 +1,0 @@
-set(ur_robot_SETUP_PY_SETUP_MODULE "distutils.core")
-set(ur_robot_SETUP_PY_VERSION "0.0.0")
-set(ur_robot_SETUP_PY_SCRIPTS "")
-set(ur_robot_SETUP_PY_PACKAGES "ur10_robot")
-set(ur_robot_SETUP_PY_PACKAGE_DIRS "src/ur10_robot")
-set(ur_robot_SETUP_PY_MODULES "")
-set(ur_robot_SETUP_PY_MODULE_DIRS "")
