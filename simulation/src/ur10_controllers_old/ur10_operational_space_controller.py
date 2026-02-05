@@ -74,6 +74,7 @@ class SpaceController():
         self.t0 = rospy.Time.now().to_sec()
         self.space = self.Space.JOINT
         self.linear_trajectory = None
+        
     def state_machine(self, state: Enum, t_elapsed: float):
         """
         State Machine:
@@ -115,7 +116,6 @@ class SpaceController():
         return q_ref_wrapped + 2*np.pi * np.round(
             (q_now_continuous - q_ref_wrapped) / (2*np.pi)
         )
-
     def trajectory(self, state: Enum, t: rospy.Time) -> np.ndarray:
         """Generate Desired Joint States
 

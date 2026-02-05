@@ -1,0 +1,26 @@
+# Operational Space Controller 6DOF Configuration
+# ================================================
+
+operational_space_ctrl:
+  # Cartesian space proportional gains (3D position)
+  gains_p_cart: [20.0, 20.0, 20.0]
+  
+  # Cartesian space derivative gains (3D velocity)
+  gains_d_cart: [20.0, 20.0, 20.0]
+  
+  # Joint space regularization gains (6 DOF)
+  # First 3 for position control, last 3 for orientation stabilization
+  gains_reg: [20.0, 20.0, 20.0, 1.0, 1.0, 1.0]
+  
+  # Time parameters for state machine (seconds)
+  # INIT: Move to non-singular configuration
+  t_init: 10.0
+  
+  # LINEAR: Linear interpolation to tracking start position
+  t_linear: 10.0
+  
+  # TRACK_SLOW: Slow circular trajectory tracking
+  t_track_slow: 40.0
+  
+  # TRACK_FAST: Fast circular trajectory tracking
+  t_track_fast: 40.0

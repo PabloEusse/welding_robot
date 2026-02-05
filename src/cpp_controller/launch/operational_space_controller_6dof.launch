@@ -1,0 +1,19 @@
+<launch>
+    <!-- Path to robot configuration file -->
+    <arg name="config_file" default="$(find cpp_controller)/launch/configs/configUR10.ini"/>
+    
+    <!-- Controller parameters -->
+    <rosparam file="$(find cpp_controller)/launch/configs/operationalSpaceCtrl6DOF.yaml" command="load"/>
+    
+    <!-- Launch the operational space controller node -->
+    <node name="operational_space_controller_6dof" 
+          pkg="cpp_controller" 
+          type="operational_space_controller_6dof_node"
+          args="$(arg config_file)"
+          output="screen"
+          required="true">
+        <env name="LD_LIBRARY_PATH" value="/usr/lib/tumtools:$(optenv LD_LIBRARY_PATH)"/>
+        <!-- Internal PID parameters required by the robot interface -->
+        <rosparam file="$(find tum_ics_ur_robot_controllers)/launch/configs/pidInt.yaml" command="load" />
+    </node>
+</launch>

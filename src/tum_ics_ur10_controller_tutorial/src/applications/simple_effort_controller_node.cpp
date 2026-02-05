@@ -1,5 +1,5 @@
 #include<tum_ics_ur_robot_lli/Robot/RobotArmConstrained.h>
-#include<tum_ics_ur10_controller_tutorial/simple_effort_controller.h>
+#include<tum_ics_ur10_controller_tutorial/operational_space_controller.h
 #include<QApplication>
 
 
