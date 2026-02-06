@@ -2,6 +2,7 @@
 #define UR_ROBOT_LLI_OPERATIONAL_SPACE_CONTROLLER_6DOF_H
 
 #include <tum_ics_ur_robot_lli/RobotControllers/ControlEffort.h>
+#include <ur_model/ur_model.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <std_msgs/Float32.h>
 #include <Eigen/Dense>
@@ -55,6 +56,9 @@ namespace tum_ics_ur_robot_lli
       JointState q_home_;
       JointState q_park_;
 
+      // Joint States plus small offset to avoid singularity
+      Vector6d q_plus;
+
       // ROS communication
       ros::NodeHandle nh_;
       ros::Publisher control_data_pub_;
@@ -94,6 +98,9 @@ namespace tum_ics_ur_robot_lli
       // Trajectory parameters
       Vector6d start_track_pose_;   // Joint pose for tracking start
       Vector6d non_singular_pose_;  // Safe non-singular pose
+      Vector3d orbital_center_;     // Center of circular trajectory (like Python)
+      double circle_radius_;        // Radius of circular trajectory
+      double vertical_amplitude_;   // Amplitude for z oscillation
 
       // Adaptive control parameters
       Eigen::Matrix<double, 14, 1> theta_;  // Adaptive parameters
@@ -105,6 +112,8 @@ namespace tum_ics_ur_robot_lli
       // UR10 DH parameters (stored internally for self-contained kinematics)
       // Standard UR10 parameters
       double d1_, a2_, a3_, d4_, d5_, d6_;
+
+      ur::URModel model_;
 
     public:
       /**
@@ -160,6 +169,9 @@ namespace tum_ics_ur_robot_lli
       // Self-contained kinematics (UR10 specific)
       Eigen::Affine3d forwardKinematics(const Vector6d& q);
       Eigen::Matrix<double, 6, 6> computeJacobian(const Vector6d& q);
+      Eigen::Matrix<double, 6, 6> computeJacobianDotTranslational(const Vector6d& q, const Vector6d& qp);
+      Vector6d computeYr_theta(const Vector6d& q, const Vector6d& qdot, const Vector6d& qrdot, const Vector6d& qrddot);
+
       Vector3d getEndEffectorPosition(const Vector6d& q);
       Vector3d getEndEffectorVelocity(const Vector6d& q, const Vector6d& qp);
     };

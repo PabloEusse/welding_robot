@@ -5,6 +5,9 @@
     <!-- Controller parameters -->
     <rosparam file="$(find cpp_controller)/launch/configs/operationalSpaceCtrl6DOF.yaml" command="load"/>
     
+    <!-- UR10 Model parameters (kinematics and dynamics) -->
+    <rosparam file="$(find ur_model_cpp)/launch/configs/ur10_model.yaml" command="load"/>
+    
     <!-- Launch the operational space controller node -->
     <node name="operational_space_controller_6dof" 
           pkg="cpp_controller" 

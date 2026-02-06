@@ -9,6 +9,7 @@ SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 find_package(catkin REQUIRED COMPONENTS
   tum_ics_ur_robot_msgs
   tum_ics_ur_robot_lli
+  ur_model_cpp
   roscpp
   sensor_msgs
   std_msgs

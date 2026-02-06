@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+
+<launch>
+
+  <!-- load robot model parameters -->
+  <rosparam file="$(find ur_model)/launch/configs/ur10_model.yaml" command="load" />
+
+  <!-- spawn model test node -->
+  <node name="test_ur10_model_node" pkg="ur_model" type="ur_model_node" output="screen"/>
+
+</launch>

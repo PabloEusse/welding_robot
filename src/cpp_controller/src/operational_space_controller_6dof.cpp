@@ -13,7 +13,8 @@ namespace tum_ics_ur_robot_lli
           is_first_iter_(true),
           current_state_(State::INIT),
           controller_type_(ControllerType::PD),
-          control_space_(ControlSpace::JOINT)
+          control_space_(ControlSpace::JOINT),
+          model_("ur10_model")
     {
       // UR10 DH parameters (meters)
       d1_ = 0.1273;   // Link offset d1
@@ -34,14 +35,19 @@ namespace tum_ics_ur_robot_lli
       Ki_PID_ = 5.0 * Matrix3d::Identity();
 
       // Initialize time parameters
-      t_INIT_ = 10.0;
+      t_INIT_ = 5.0;
       t_LINEAR_ = 10.0;
-      t_TRACK_SLOW_ = 40.0;
-      t_TRACK_FAST_ = 40.0;
+      t_TRACK_SLOW_ = 10.0;
+      t_TRACK_FAST_ = 10.0;
 
       // Initialize poses
       start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0.0, 0.0, 0.0;
       non_singular_pose_ << 0.0, 0.0, -M_PI / 2.0, 0.0, 0.0, 0.0;
+      
+      // Initialize circular trajectory parameters (like Python)
+      orbital_center_.setZero();
+      circle_radius_ = 0.20;      // Same as Python's circle_radius_nominal
+      vertical_amplitude_ = 0.02; // Same as Python's vertical_oscillation_amplitude
 
       // Initialize adaptive parameters
       theta_.setZero();
@@ -62,6 +68,7 @@ namespace tum_ics_ur_robot_lli
       steady_state_error_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/steady_state_error", 10);
       cartesian_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/cart_coor", 10);
       control_data_pub_ = nh_.advertise<tum_ics_ur_robot_msgs::ControlData>("operational_space_controller_data", 1);
+      
     }
 
     OperationalSpaceController6DOF::~OperationalSpaceController6DOF()
@@ -85,6 +92,14 @@ namespace tum_ics_ur_robot_lli
     bool OperationalSpaceController6DOF::init()
     {
       ROS_WARN_STREAM("OperationalSpaceController6DOF::init");
+
+      // CRITICAL: Initialize the ur_model - must be called before using any model functions!
+      if (!model_.initRequest(nh_))
+      {
+        ROS_ERROR_STREAM("Error: initializing ur_model failed!");
+        return false;
+      }
+      ROS_INFO_STREAM("ur_model initialized successfully");
 
       std::string ns = "~operational_space_ctrl";
 
@@ -127,6 +142,8 @@ namespace tum_ics_ur_robot_lli
       ROS_WARN_STREAM("Time params - INIT: " << t_INIT_ << ", LINEAR: " << t_LINEAR_ 
                       << ", TRACK_SLOW: " << t_TRACK_SLOW_ << ", TRACK_FAST: " << t_TRACK_FAST_);
 
+
+
       return true;
     }
     bool OperationalSpaceController6DOF::start()
@@ -149,6 +166,12 @@ namespace tum_ics_ur_robot_lli
         last_X_ = X_;
 
         ROS_WARN_STREAM("START [RAD]: \n" << q_start_.transpose());
+        ROS_WARN_STREAM("Initial EE position X_: " << X_.transpose() << " (should be ~0.5-1.0m values)");
+        
+        // Also verify track position FK
+        Vector3d track_pos = getEndEffectorPosition(start_track_pose_);
+        ROS_WARN_STREAM("Track pose FK: " << track_pos.transpose());
+        
         is_first_iter_ = false;
       }
 
@@ -168,7 +191,8 @@ namespace tum_ics_ur_robot_lli
       {
         Eigen::Matrix<double, 6, 6> J = computeJacobian(state.q);
         double w = computeManipulability(J);
-        if (w < 0.1)
+        //TODO: Set w threshold back to 0.01 after testing
+        if (w < 0.00)
         {
           ROS_WARN_STREAM("Near singularity! Switching to joint space. w=" << w);
           control_space_ = ControlSpace::JOINT;
@@ -179,6 +203,7 @@ namespace tum_ics_ur_robot_lli
       // Generate desired trajectory
       Vector6d q_des, qdot_des, qddot_des;
       Vector3d x_des, xdot_des, xddot_des;
+      //ROS_WARN_STREAM("x_des: " << x_des.transpose() << " xdot_des: " << xdot_des.transpose() << " xddot_des: " << xddot_des.transpose());
       generateTrajectory(time.tD(), q_des, qdot_des, qddot_des, x_des, xdot_des, xddot_des);
 
       // Compute control torque
@@ -192,6 +217,12 @@ namespace tum_ics_ur_robot_lli
       else // CARTESIAN
       {
         Vector3d xdot_current = getEndEffectorVelocity(state.q, state.qp);
+        
+        // DEBUG: Log x_des to verify it's not zero
+        ROS_INFO_STREAM_THROTTLE(0.5, "[CART] x_des=" << x_des.transpose() 
+                                 << " X_=" << X_.transpose()
+                                 << " delta=" << (X_ - x_des).transpose());
+        
         tau = cartesianSpaceController(state, X_, xdot_current, x_des, xdot_des, xddot_des, dt);
       }
 
@@ -252,8 +283,23 @@ namespace tum_ics_ur_robot_lli
       {
         ROS_INFO_STREAM("State transition: " << static_cast<int>(current_state_) 
                         << " -> " << static_cast<int>(new_state));
+        
+        // Compute orbital_center_ when transitioning to TRACK_SLOW (like Python)
+        // Python: self.orbital_center = self.linear_start_pose - shift
+        if (new_state == State::TRACK_SLOW)
+        {
+          // orbital_center_ is offset from the current Cartesian position
+          // In Python: c = self.linear_start_pose (which is where LINEAR ends)
+          // The circle is centered such that the initial point is on the circle
+          orbital_center_ = X_;  // Start circle from current position
+          orbital_center_(0) -= circle_radius_;  // Offset so we start at angle=0 on the circle
+          ROS_INFO_STREAM("Computed orbital_center_: " << orbital_center_.transpose());
+        }
+        
         current_state_ = new_state;
-        last_t_ = ros::Time::now().toSec();
+        // FIXED: Use consistent time source! t_elapsed is based on time.tD(), not ros::Time::now()
+        // We need to store the controller time at transition, not wall clock time
+        last_t_ = t_elapsed + t0_;  // Convert back to absolute controller time
         last_q_ = q_;
         last_X_ = X_;
       }
@@ -280,7 +326,16 @@ namespace tum_ics_ur_robot_lli
       Vector3d amplitude;
       amplitude << track_pos_cartesian(0), track_pos_cartesian(0), 0.05;
 
+
+      // FIXED: offset should be time since current state started, not absolute time
+      // Python uses: tau = (t_now - self.phase_entry_time).to_sec()
       double offset = t - last_t_;
+      
+      // DEBUG: Log trajectory generation details
+      ROS_INFO_STREAM_THROTTLE(0.5, "[TRAJ] State=" << static_cast<int>(current_state_) 
+                               << " t=" << t << " last_t_=" << last_t_ << " offset=" << offset
+                               << " last_X_=" << last_X_.transpose()
+                               << " track_pos=" << track_pos_cartesian.transpose());
 
       switch (current_state_)
       {
@@ -295,24 +350,37 @@ namespace tum_ics_ur_robot_lli
         break;
 
       case State::TRACK_SLOW:
-        x_des(0) = std::cos(omega * offset) * amplitude(0);
-        x_des(1) = std::sin(omega * offset) * amplitude(1);
-        x_des(2) = std::cos(omega_z * offset) * amplitude(2);
+      {
+        // FIXED: Circle centered at orbital_center_, not at origin (like Python)
+        // Python: x = c[0] + radius*cos(theta), y = c[1] + radius*sin(theta), z = c[2] + amp*sin(k*theta)
+        double k = 10.0;  // z oscillation frequency multiplier (like Python)
+        double theta = omega * offset;
+        
+        x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
+        x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
+        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(k * theta);
 
-        xdot_des(0) = -std::sin(omega * offset) * omega * amplitude(0);
-        xdot_des(1) = std::cos(omega * offset) * omega * amplitude(1);
-        xdot_des(2) = -std::sin(omega_z * offset) * omega_z * amplitude(2);
+        xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
+        xdot_des(1) = circle_radius_ * omega * std::cos(theta);
+        xdot_des(2) = vertical_amplitude_ * k * omega * std::cos(k * theta);
         break;
+      }
 
       case State::TRACK_FAST:
-        x_des(0) = std::cos(omega_fast * offset) * amplitude(0);
-        x_des(1) = std::sin(omega_fast * offset) * amplitude(1);
-        x_des(2) = std::cos(omega_z_fast * offset) * amplitude(2);
+      {
+        // FIXED: Same fix for fast tracking
+        double k = 10.0;
+        double theta = omega_fast * offset;
+        
+        x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
+        x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
+        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(k * theta);
 
-        xdot_des(0) = -std::sin(omega_fast * offset) * omega_fast * amplitude(0);
-        xdot_des(1) = std::cos(omega_fast * offset) * omega_fast * amplitude(1);
-        xdot_des(2) = -std::sin(omega_z_fast * offset) * omega_z_fast * amplitude(2);
+        xdot_des(0) = -circle_radius_ * omega_fast * std::sin(theta);
+        xdot_des(1) = circle_radius_ * omega_fast * std::cos(theta);
+        xdot_des(2) = vertical_amplitude_ * k * omega_fast * std::cos(k * theta);
         break;
+      }
 
       case State::END:
       default:
@@ -356,8 +424,11 @@ namespace tum_ics_ur_robot_lli
       Vector6d tau;
       tau.setZero();
 
+      Vector6d Yr_theta; // Placeholder for regressor-based adaptive control term
+
       // Cartesian errors
       Vector3d delta_x = x_current - x_des;
+      // ROS_WARN_STREAM("delta_x: " << delta_x.transpose());  
       Vector3d delta_xdot = xdot_current - xdot_des;
 
       // Update integral error
@@ -370,28 +441,48 @@ namespace tum_ics_ur_robot_lli
       // Compute pseudoinverse of Jacobian
       Eigen::MatrixXd J_pinv = pseudoInverse(J_ee);
 
+      Eigen::Matrix<double,6,6> Jdot_ee_w  = computeJacobianDotTranslational(state.q, state.qp);
+      Eigen::Matrix<double, 3, 6> Jdot_ee_w_translation = Jdot_ee_w.block<3, 6>(0, 0); // Get translational part of Jacobian derivative in world frame
+      //Eigen::Matrix<double, 3, 6> Jdot_e_w_linear = Jdot_ee_w.block<3, 6>(3, 0); // Extract translational part of Jacobian derivative
+      //PD controller seems to be correctly
       if (controller_type_ == ControllerType::PD)
       {
         // Reference Cartesian velocity
         Vector3d xrdot = xdot_des - Kp_PD_ * delta_x;
-
+        Vector3d xrddot = xddot_des - Kp_PD_ * delta_xdot;
         // Map to joint space
         Vector6d qrdot = J_pinv * xrdot;
+        Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
 
         // Sliding variable in joint space
         Vector6d S_q = state.qp - qrdot;
 
+        //TODO: implement missing parts aka ro, computeRegressor and
+        //Vector6d Yr = computeRegressor(state.q, state.qp, qrdot, xddot_des); // Compute regressor based on current state and desired acceleration
+        //Vector6d theta -= (ro * (Yr.transpose() * S_q)) * dt; // Update adaptive parameters using gradient descent
+        Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
         // Simple PD control (can be extended with adaptive control)
-        tau = -Kreg_PD_ * S_q;
+        tau = -Kreg_PD_ * S_q + Yr_theta;
+
+
+        
+       
       }
       else if (controller_type_ == ControllerType::PID)
       {
+        
+        //TODO: implement correct version of PID Controller 
         // PID in Cartesian space
         Vector3d xrdot = xdot_des - Kp_PID_ * delta_x - Ki_PID_ * integral_error_acc_;
+        Vector3d xrddot = xddot_des - Kp_PID_ * delta_xdot - Ki_PID_ * delta_x;
         Vector6d qrdot = J_pinv * xrdot;
+        // TODO: implement Jdot_ee helper function that calculates the time derivative of the Jacobian based on current q and qp
+        Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
         Vector6d S_q = state.qp - qrdot;
-        
-        tau = -Kd_PID_(0, 0) * S_q;  // Use scalar Kd for simplicity
+        //TODO: add helper function that calculate M, C, G and maybe also regressor Y from model.zip files
+        //Yr_theta = M * qrddot + C * qrdot + G; // Regressor-based adaptive control law (simplified)
+        Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
+        tau = -Kd_PID_(0, 0) * S_q + Yr_theta;  // Use scalar Kd for simplicity       
       }
 
       // Publish Cartesian tracking data
@@ -458,99 +549,62 @@ namespace tum_ics_ur_robot_lli
     // =========================================================================
     // Self-contained UR10 Kinematics Functions
     // =========================================================================
-
-    // all of this can also be found in model.zip -> hence correct forward kinematics and jacobians
-    Eigen::Affine3d OperationalSpaceController6DOF::forwardKinematics(const Vector6d &q)
-    {
-      // UR10 Forward Kinematics using DH convention
-      // DH Parameters for UR10:
-      // Joint | a      | d      | alpha   | theta
-      // 1     | 0      | d1     | pi/2    | q1
-      // 2     | a2     | 0      | 0       | q2
-      // 3     | a3     | 0      | 0       | q3
-      // 4     | 0      | d4     | pi/2    | q4
-      // 5     | 0      | d5     | -pi/2   | q5
-      // 6     | 0      | d6     | 0       | q6
-
-      double c1 = std::cos(q(0)), s1 = std::sin(q(0));
-      double c2 = std::cos(q(1)), s2 = std::sin(q(1));
-      double c3 = std::cos(q(2)), s3 = std::sin(q(2));
-      double c4 = std::cos(q(3)), s4 = std::sin(q(3));
-      double c5 = std::cos(q(4)), s5 = std::sin(q(4));
-      double c6 = std::cos(q(5)), s6 = std::sin(q(5));
-
-      double c23 = std::cos(q(1) + q(2));
-      double s23 = std::sin(q(1) + q(2));
-      double c234 = std::cos(q(1) + q(2) + q(3));
-      double s234 = std::sin(q(1) + q(2) + q(3));
-
-      Eigen::Matrix4d T;
-      T.setIdentity();
-
-      // Position of end-effector
-      double px = d6 * (c1 * c234 * c5 + s1 * s5) + c1 * (a3_ * c23 + a2_ * c2) - d5 * s1 - d4 * c1 * s234;
-      double py = d6 * (s1 * c234 * c5 - c1 * s5) + s1 * (a3_ * c23 + a2_ * c2) + d5 * c1 - d4 * s1 * s234;
-      double pz = d1_ + a3_ * s23 + a2_ * s2 - d6 * s234 * c5 - d4 * c234;
-
-      T(0, 3) = px;
-      T(1, 3) = py;
-      T(2, 3) = pz;
-
-      // Rotation matrix (simplified - can be expanded if needed)
-      T(0, 0) = c6 * (c1 * c234 * c5 + s1 * s5) - s6 * c1 * s234;
-      T(0, 1) = -s6 * (c1 * c234 * c5 + s1 * s5) - c6 * c1 * s234;
-      T(0, 2) = c1 * c234 * s5 - s1 * c5;
-
-      T(1, 0) = c6 * (s1 * c234 * c5 - c1 * s5) - s6 * s1 * s234;
-      T(1, 1) = -s6 * (s1 * c234 * c5 - c1 * s5) - c6 * s1 * s234;
-      T(1, 2) = s1 * c234 * s5 + c1 * c5;
-
-      T(2, 0) = -c6 * s234 * c5 - s6 * c234;
-      T(2, 1) = s6 * s234 * c5 - c6 * c234;
-      T(2, 2) = -s234 * s5;
-
-      Eigen::Affine3d result;
-      result.matrix() = T;
-      return result;
-    }
+    
     Eigen::Matrix<double, 6, 6> OperationalSpaceController6DOF::computeJacobian(const Vector6d &q)
     {
-      // Compute geometric Jacobian for UR10 robot numerically
-      // Using numerical differentiation for robustness
-      Eigen::Matrix<double, 6, 6> J;
-      J.setZero();
-
-      const double eps = 1e-7;
-
-      // Get current end-effector pose
-      Eigen::Affine3d T0 = forwardKinematics(q);
-      Vector3d p0 = T0.translation();
-
-      for (int i = 0; i < 6; ++i)
-      {
-        Vector6d q_plus = q;
-        q_plus(i) += eps;
-
-        Eigen::Affine3d T_plus = forwardKinematics(q_plus);
-        Vector3d p_plus = T_plus.translation();
-
-        // Linear velocity Jacobian (numerical derivative)
-        J.block<3, 1>(0, i) = (p_plus - p0) / eps;
-
-        // Angular velocity Jacobian (z-axis of each joint in base frame)
-        // For revolute joints: omega = z_i * q_dot_i
-        // This is a simplified approach - computing z-axis rotation contribution
-        Eigen::Matrix3d R_diff = T_plus.rotation() * T0.rotation().transpose();
-        Eigen::AngleAxisd aa(R_diff);
-        J.block<3, 1>(3, i) = aa.axis() * aa.angle() / eps;
-      }
-
-      return J;
+      // Get Jacobian directly from ur_model (no numerical differentiation needed)
+      // Transform from 0-frame to world frame using T_0_w rotation
+      Eigen::Matrix4d T_0_w;
+      T_0_w << -1, 0, 0, 0,
+              0, -1, 0, 0,
+              0, 0, 1, 0,
+              0, 0, 0, 1;
+      Eigen::Matrix3d R_0_w_ = T_0_w.block<3, 3>(0, 0);
+      Eigen::Matrix<double, 6,6> Rotation_0_w;
+      Rotation_0_w.setZero();
+      Rotation_0_w.block<3, 3>(0, 0) = R_0_w_;
+      Rotation_0_w.block<3, 3>(3, 3) = R_0_w_;
+      
+      // FIXED: Use q directly, not the uninitialized class member q_plus
+      Eigen::Matrix<double,6,6> J_ef_0 = model_.J_ef_0(q);
+      Eigen::Matrix<double,6,6> J_ef_w = Rotation_0_w * J_ef_0; // Transform to world frame
+      return J_ef_w;
     }
+    Eigen::Matrix<double, 6, 6> OperationalSpaceController6DOF::computeJacobianDotTranslational(const Vector6d &q, const Vector6d &qp)
+    {
+      Eigen::Matrix<double, 6, 6> Jp_ef_0 = model_.Jp_ef_0(q, qp); 
+      //copied T_0_w from ur_model aka python version
+      Eigen::Matrix4d T_0_w;
+      T_0_w << -1, 0, 0, 0,
+              0, -1, 0, 0,
+              0, 0, 1, 0,
+              0, 0, 0, 1;
+      Eigen::Matrix3d R_0_w_ = T_0_w.block<3, 3>(0, 0);
+      Eigen::Matrix<double, 6,6> Rotation_0_w;
+      Rotation_0_w.setZero();
+      Rotation_0_w.block<3, 3>(0, 0) = R_0_w_;
+      Rotation_0_w.block<3, 3>(3, 3) = R_0_w_;
+      //Eigen::Matrix<double, 3, 6> Jp_ef_w = Rotation_0_w.block<3, 3>(0, 0) * Jp_ef_0.block<3, 6>(3, 0); // Transform to base frame
+      //Eigen::Matrix<double, 3, 6> Jp_ef_w = R_0_w_ * Jp_ef_0.block<3, 6>(0, 0); // Transform to base frame
+      Eigen::Matrix<double, 6, 6> Jp_ef_w = Rotation_0_w * Jp_ef_0; // Transform to base frame
+      return Jp_ef_w;
+    }
+
     Vector3d OperationalSpaceController6DOF::getEndEffectorPosition(const Vector6d &q)
     {
-      Eigen::Affine3d T = forwardKinematics(q);
-      return T.translation();
+      //copied T_0_w from ur_model aka python version
+      Eigen::Matrix4d T_0_w;
+      T_0_w << -1, 0, 0, 0,
+              0, -1, 0, 0,
+              0, 0, 1, 0,
+              0, 0, 0, 1;
+      //get T_ef_0 from model
+      //Eigen::Matrix4d T_ef_0 = model_.T_ef_0(q);
+      Eigen::Matrix4d T_ef_0 = model_.T_ef_0(q).matrix();
+
+      //Transform to world frame
+      Eigen::Matrix4d T_ef_w = T_0_w * T_ef_0; 
+      return T_ef_w.block<3,1>(0,3);
     }
     Vector3d OperationalSpaceController6DOF::getEndEffectorVelocity(const Vector6d &q, const Vector6d &qp)
     {
@@ -558,6 +612,18 @@ namespace tum_ics_ur_robot_lli
       Eigen::Matrix<double, 6, 6> J = computeJacobian(q);
       Eigen::Matrix<double, 3, 6> J_linear = J.block<3, 6>(0, 0);
       return J_linear * qp;
+    }
+
+    Vector6d OperationalSpaceController6DOF::computeYr_theta(const Vector6d& q, const Vector6d& qdot, const Vector6d& qrdot, const Vector6d& qrddot)
+    {
+      //get Regressor Y and theta_ from ur_model
+      // Initalize the robot regressor matrix
+      ur::URModel::Regressor Y = model_.regressor(q, qdot, qrdot, qrddot);
+      
+      // Initalize the robots parameter vector
+      ur::URModel::Parameters th = model_.parameterInitalGuess(); 
+      Vector6d Yr_theta = Y * th; // Compute the regressor-based control term
+      return Yr_theta;
     }
 
   } // namespace RobotControllers

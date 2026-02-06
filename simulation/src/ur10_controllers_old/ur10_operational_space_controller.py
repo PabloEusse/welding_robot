@@ -63,9 +63,9 @@ class SpaceController():
 
         self.state = self.State.INIT
         self.t_INIT = 10
-        self.t_LINEAR = 10
-        self.t_TRACK_SLOW = 40
-        self.t_TRACK_FAST = 40
+        self.t_LINEAR = 0
+        self.t_TRACK_SLOW = 0
+        self.t_TRACK_FAST = 0
         self.last_t = rospy.Time.now().to_sec()
         self.last_q = q_init
         self.last_X = self.X

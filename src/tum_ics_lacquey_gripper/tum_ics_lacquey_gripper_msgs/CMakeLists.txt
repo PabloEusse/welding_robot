@@ -45,8 +45,8 @@ catkin_package(
 ######################################################################################
 # TUM_ICS_NOTE: We need to modify the installation variables to be compliant with the debtools
 # This function is controlled with the global variable -DDEB_BUILD (true/false)
-include(/usr/share/cmake/CMakeTools/ics_tools.cmake)
-ics_ros_debgen()
+# include(/usr/share/cmake/CMakeTools/ics_tools.cmake)
+# ics_ros_debgen()
 
 foreach(dir msg srv)
     install(DIRECTORY ${dir}/
