@@ -37,8 +37,9 @@ namespace tum_ics_ur_robot_lli
       // Initialize time parameters
       t_INIT_ = 5.0;
       t_LINEAR_ = 10.0;
-      t_TRACK_SLOW_ = 10.0;
-      t_TRACK_FAST_ = 10.0;
+      // increasing the time of tracking phase leads to the robots velocity to decrease -> hence velocity limits arent violated 
+      t_TRACK_SLOW_ = 600.0;
+      t_TRACK_FAST_ = 30.0;
 
       // Initialize poses
       start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0.0, 0.0, 0.0;
@@ -191,8 +192,7 @@ namespace tum_ics_ur_robot_lli
       {
         Eigen::Matrix<double, 6, 6> J = computeJacobian(state.q);
         double w = computeManipulability(J);
-        //TODO: Set w threshold back to 0.01 after testing
-        if (w < 0.00)
+        if (w < 0.0)
         {
           ROS_WARN_STREAM("Near singularity! Switching to joint space. w=" << w);
           control_space_ = ControlSpace::JOINT;
@@ -259,23 +259,36 @@ namespace tum_ics_ur_robot_lli
       {
         new_state = State::END;
         control_space_ = ControlSpace::JOINT;
+        //last_t_ = ros::Time::now().toSec();
+        last_q_ = q_;
+        last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ + t_LINEAR_ + t_TRACK_SLOW_ && 
                current_state_ == State::TRACK_SLOW)
       {
         new_state = State::TRACK_FAST;
         control_space_ = ControlSpace::CARTESIAN;
+        //last_t_ = ros::Time::now().toSec();
+        last_q_ = q_;
+        last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ + t_LINEAR_ && 
                current_state_ == State::LINEAR)
       {
         new_state = State::TRACK_SLOW;
         control_space_ = ControlSpace::CARTESIAN;
+        //last_t_ = ros::Time::now().toSec();
+        last_q_ = q_;
+        last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ && current_state_ == State::INIT)
       {
         new_state = State::LINEAR;
         control_space_ = ControlSpace::CARTESIAN;
+        //last_t_ = t_elapsed + t0_;
+        //last_t_ = ros::Time::now().toSec();
+        last_q_ = q_;
+        last_X_ = X_;
       }
 
       // If state changed, update transition variables
@@ -300,8 +313,8 @@ namespace tum_ics_ur_robot_lli
         // FIXED: Use consistent time source! t_elapsed is based on time.tD(), not ros::Time::now()
         // We need to store the controller time at transition, not wall clock time
         last_t_ = t_elapsed + t0_;  // Convert back to absolute controller time
-        last_q_ = q_;
-        last_X_ = X_;
+        // last_q_ = q_;
+        // last_X_ = X_;
       }
     }
     void OperationalSpaceController6DOF::generateTrajectory(double t,
@@ -356,6 +369,8 @@ namespace tum_ics_ur_robot_lli
         double k = 10.0;  // z oscillation frequency multiplier (like Python)
         double theta = omega * offset;
         
+        /*
+        //orbital centered trajectory generation 
         x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
         x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
         x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(k * theta);
@@ -363,6 +378,26 @@ namespace tum_ics_ur_robot_lli
         xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega * std::cos(theta);
         xdot_des(2) = vertical_amplitude_ * k * omega * std::cos(k * theta);
+        */
+
+        /*
+        Python code:
+        x_des = np.array([np.cos(omega * (t - self.last_t)), np.sin(omega * (t - self.last_t)), np.cos(omega_z * (t - self.last_t))]) * amplitude
+        offset = t - self.last_t 
+        xdot_des = amplitude * np.array([
+            -np.sin(omega   * offset) * omega,
+            np.cos(omega   * offset) * omega,
+            -np.sin(omega_z * offset) * omega_z,
+        ])
+        */
+        //cpp code:
+        x_des(0) = amplitude(0) * std::cos(omega * offset);
+        x_des(1) = amplitude(1) * std::sin(omega * offset);
+        x_des(2) = amplitude(2) * std::cos(omega_z * offset);
+
+        xdot_des(0) = -amplitude(0) * std::sin(omega * offset) * omega;
+        xdot_des(1) = amplitude(1) * std::cos(omega * offset) * omega;
+        xdot_des(2) = -amplitude(2) * std::sin(omega_z * offset) * omega_z;
         break;
       }
 
@@ -379,6 +414,14 @@ namespace tum_ics_ur_robot_lli
         xdot_des(0) = -circle_radius_ * omega_fast * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega_fast * std::cos(theta);
         xdot_des(2) = vertical_amplitude_ * k * omega_fast * std::cos(k * theta);
+
+        x_des(0) = amplitude(0) * std::cos(omega_fast * offset);
+        x_des(1) = amplitude(1) * std::sin(omega_fast * offset);
+        x_des(2) = amplitude(2) * std::cos(omega_z_fast * offset);
+
+        xdot_des(0) = -amplitude(0) * std::sin(omega_fast * offset) * omega_fast;
+        xdot_des(1) = amplitude(1) * std::cos(omega_fast * offset) * omega_fast;
+        xdot_des(2) = -amplitude(2) * std::sin(omega_z_fast * offset) * omega_z_fast;
         break;
       }
 
@@ -559,11 +602,11 @@ namespace tum_ics_ur_robot_lli
               0, -1, 0, 0,
               0, 0, 1, 0,
               0, 0, 0, 1;
-      Eigen::Matrix3d R_0_w_ = T_0_w.block<3, 3>(0, 0);
+      Eigen::Matrix3d R_0_w = T_0_w.block<3, 3>(0, 0);
       Eigen::Matrix<double, 6,6> Rotation_0_w;
       Rotation_0_w.setZero();
-      Rotation_0_w.block<3, 3>(0, 0) = R_0_w_;
-      Rotation_0_w.block<3, 3>(3, 3) = R_0_w_;
+      Rotation_0_w.block<3, 3>(0, 0) = R_0_w;
+      Rotation_0_w.block<3, 3>(3, 3) = R_0_w;
       
       // FIXED: Use q directly, not the uninitialized class member q_plus
       Eigen::Matrix<double,6,6> J_ef_0 = model_.J_ef_0(q);
@@ -579,13 +622,11 @@ namespace tum_ics_ur_robot_lli
               0, -1, 0, 0,
               0, 0, 1, 0,
               0, 0, 0, 1;
-      Eigen::Matrix3d R_0_w_ = T_0_w.block<3, 3>(0, 0);
+      Eigen::Matrix3d R_0_w = T_0_w.block<3, 3>(0, 0);
       Eigen::Matrix<double, 6,6> Rotation_0_w;
       Rotation_0_w.setZero();
-      Rotation_0_w.block<3, 3>(0, 0) = R_0_w_;
-      Rotation_0_w.block<3, 3>(3, 3) = R_0_w_;
-      //Eigen::Matrix<double, 3, 6> Jp_ef_w = Rotation_0_w.block<3, 3>(0, 0) * Jp_ef_0.block<3, 6>(3, 0); // Transform to base frame
-      //Eigen::Matrix<double, 3, 6> Jp_ef_w = R_0_w_ * Jp_ef_0.block<3, 6>(0, 0); // Transform to base frame
+      Rotation_0_w.block<3, 3>(0, 0) = R_0_w;
+      Rotation_0_w.block<3, 3>(3, 3) = R_0_w;
       Eigen::Matrix<double, 6, 6> Jp_ef_w = Rotation_0_w * Jp_ef_0; // Transform to base frame
       return Jp_ef_w;
     }
@@ -600,7 +641,7 @@ namespace tum_ics_ur_robot_lli
               0, 0, 0, 1;
       //get T_ef_0 from model
       //Eigen::Matrix4d T_ef_0 = model_.T_ef_0(q);
-      Eigen::Matrix4d T_ef_0 = model_.T_ef_0(q).matrix();
+      Eigen::Matrix4d T_ef_0 = model_.T_ef_0(q).matrix(); 
 
       //Transform to world frame
       Eigen::Matrix4d T_ef_w = T_0_w * T_ef_0; 
@@ -608,10 +649,26 @@ namespace tum_ics_ur_robot_lli
     }
     Vector3d OperationalSpaceController6DOF::getEndEffectorVelocity(const Vector6d &q, const Vector6d &qp)
     {
+
+      /*
+      def get_ee_w_dot(self):
+        J_ee_w = self.model.J_ee_w_fn(*self.q)
+        
+        # Calculate the end-effector Twist in the world frame V_ee_w
+        V_ee_w = J_ee_w @ self.qdot
+        return V_ee_w[3:]
+      */
+      Eigen::Matrix<double, 6, 6> J = computeJacobian(q);
+      Eigen:Matrix<double, 6, 1> V_ee_w = J * qp; // End-effector twist in world frame
+      return V_ee_w.block<3, 1>(3, 0); //
+
+      /*
       // xdot = J * qdot (linear velocity part only)
       Eigen::Matrix<double, 6, 6> J = computeJacobian(q);
       Eigen::Matrix<double, 3, 6> J_linear = J.block<3, 6>(0, 0);
-      return J_linear * qp;
+      return J_linear * qp;      
+      */
+
     }
 
     Vector6d OperationalSpaceController6DOF::computeYr_theta(const Vector6d& q, const Vector6d& qdot, const Vector6d& qrdot, const Vector6d& qrddot)

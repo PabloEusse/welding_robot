@@ -56,9 +56,6 @@ namespace tum_ics_ur_robot_lli
       JointState q_home_;
       JointState q_park_;
 
-      // Joint States plus small offset to avoid singularity
-      Vector6d q_plus;
-
       // ROS communication
       ros::NodeHandle nh_;
       ros::Publisher control_data_pub_;
