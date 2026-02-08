@@ -34,21 +34,20 @@ namespace tum_ics_ur_robot_lli
       Kd_PID_ = 5.0 * Matrix3d::Identity();
       Ki_PID_ = 5.0 * Matrix3d::Identity();
 
-      // Initialize time parameters
-      t_INIT_ = 5.0;
+      // Initialize time parameters (matching Python)
+      t_INIT_ = 10.0;    // Was 5.0, Python uses 10.0
       t_LINEAR_ = 10.0;
-      // increasing the time of tracking phase leads to the robots velocity to decrease -> hence velocity limits arent violated 
-      t_TRACK_SLOW_ = 600.0;
-      t_TRACK_FAST_ = 30.0;
+      t_TRACK_SLOW_ = 40.0;
+      t_TRACK_FAST_ = 40.0;  // Match Python's 40s
 
       // Initialize poses
       start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0.0, 0.0, 0.0;
-      non_singular_pose_ << 0.0, 0.0, -M_PI / 2.0, 0.0, 0.0, 0.0;
+      non_singular_pose_ << 0.0, 0.0, -M_PI / 2.0, 0.0, 0.0, 0.0;  // Match Python
       
-      // Initialize circular trajectory parameters (like Python)
+      // Initialize circular trajectory parameters
       orbital_center_.setZero();
-      circle_radius_ = 0.20;      // Same as Python's circle_radius_nominal
-      vertical_amplitude_ = 0.02; // Same as Python's vertical_oscillation_amplitude
+      circle_radius_ = 0.15;      // Smaller radius for safer motion
+      vertical_amplitude_ = 0.02; // Small Z oscillation
 
       // Initialize adaptive parameters
       theta_.setZero();
@@ -336,6 +335,11 @@ namespace tum_ics_ur_robot_lli
       double omega_fast = 2.0 * M_PI / t_TRACK_FAST_;
       double omega_z_fast = omega_fast * 15.0;
 
+      omega *= 4.0;
+      omega_z *= 4.0;
+      omega_fast *= 4.0;
+      omega_z_fast *= 4.0;
+
       Vector3d amplitude;
       amplitude << track_pos_cartesian(0), track_pos_cartesian(0), 0.05;
 
@@ -364,64 +368,36 @@ namespace tum_ics_ur_robot_lli
 
       case State::TRACK_SLOW:
       {
-        // FIXED: Circle centered at orbital_center_, not at origin (like Python)
-        // Python: x = c[0] + radius*cos(theta), y = c[1] + radius*sin(theta), z = c[2] + amp*sin(k*theta)
-        double k = 10.0;  // z oscillation frequency multiplier (like Python)
+        // CONTINUOUS TRAJECTORY: Circle centered at orbital_center_, starting from last_X_
+        // At t=0 (offset=0), theta=0, and we want x_des = last_X_ (where LINEAR ended)
+        // Circle in XY plane with Z oscillation
         double theta = omega * offset;
         
-        /*
-        //orbital centered trajectory generation 
+        // Circle centered at orbital_center_, radius = circle_radius_
+        // At theta=0: x = center + radius*cos(0) = center + radius
+        // So orbital_center_ was set to last_X_ - [radius, 0, 0] in updateStateMachine
         x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
         x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
-        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(k * theta);
+        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
 
         xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega * std::cos(theta);
-        xdot_des(2) = vertical_amplitude_ * k * omega * std::cos(k * theta);
-        */
-
-        /*
-        Python code:
-        x_des = np.array([np.cos(omega * (t - self.last_t)), np.sin(omega * (t - self.last_t)), np.cos(omega_z * (t - self.last_t))]) * amplitude
-        offset = t - self.last_t 
-        xdot_des = amplitude * np.array([
-            -np.sin(omega   * offset) * omega,
-            np.cos(omega   * offset) * omega,
-            -np.sin(omega_z * offset) * omega_z,
-        ])
-        */
-        //cpp code:
-        x_des(0) = amplitude(0) * std::cos(omega * offset);
-        x_des(1) = amplitude(1) * std::sin(omega * offset);
-        x_des(2) = amplitude(2) * std::cos(omega_z * offset);
-
-        xdot_des(0) = -amplitude(0) * std::sin(omega * offset) * omega;
-        xdot_des(1) = amplitude(1) * std::cos(omega * offset) * omega;
-        xdot_des(2) = -amplitude(2) * std::sin(omega_z * offset) * omega_z;
+        xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
         break;
       }
 
       case State::TRACK_FAST:
       {
-        // FIXED: Same fix for fast tracking
-        double k = 10.0;
+        // Same continuous trajectory but faster
         double theta = omega_fast * offset;
         
         x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
         x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
-        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(k * theta);
+        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z_fast * theta);
 
         xdot_des(0) = -circle_radius_ * omega_fast * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega_fast * std::cos(theta);
-        xdot_des(2) = vertical_amplitude_ * k * omega_fast * std::cos(k * theta);
-
-        x_des(0) = amplitude(0) * std::cos(omega_fast * offset);
-        x_des(1) = amplitude(1) * std::sin(omega_fast * offset);
-        x_des(2) = amplitude(2) * std::cos(omega_z_fast * offset);
-
-        xdot_des(0) = -amplitude(0) * std::sin(omega_fast * offset) * omega_fast;
-        xdot_des(1) = amplitude(1) * std::cos(omega_fast * offset) * omega_fast;
-        xdot_des(2) = -amplitude(2) * std::sin(omega_z_fast * offset) * omega_z_fast;
+        xdot_des(2) = vertical_amplitude_ * omega_z_fast * std::cos(omega_z_fast * theta);
         break;
       }
 
@@ -431,6 +407,7 @@ namespace tum_ics_ur_robot_lli
         break;
       }
     }
+    // this one should normally come from the adaptive controller, but 
     Vector6d OperationalSpaceController6DOF::jointSpaceController(const JointState &state,
                                                                    const Vector6d &q_des,
                                                                    const Vector6d &qdot_des,
