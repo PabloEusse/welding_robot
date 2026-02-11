@@ -37,9 +37,10 @@ from threading import Lock
 
 from sensor_msgs.msg import CameraInfo
 from geometry_msgs.msg import Point
+from visualization_msgs.msg import Marker, MarkerArray as VizMarkerArray
 
-from trajectory_tracker.msg import TrajectoryTarget
-from trajectory_tracker.srv import GetTargetPosition, GetTargetPositionResponse
+from trajectory_tracker.msg import TrajectoryTarget, MarkerArray, WorkspaceCalibration
+from trajectory_tracker.srv import GetTargetPosition, GetTargetPositionResponse, CalibrateWorkspace, CalibrateWorkspaceResponse
 
 
 class CoordinateTransformerNode:
@@ -69,19 +70,34 @@ class CoordinateTransformerNode:
         self.current_target = None
         self.target_lock = Lock()
 
+        # Workspace calibration (using 2 markers for 2-point calibration)
+        self.workspace_calibrated = False
+        self.workspace_marker_ids = [0, 1]  # Default marker IDs
+        self.workspace_corner_0 = None  # Robot frame position of marker 0
+        self.workspace_corner_1 = None  # Robot frame position of marker 1
+        self.workspace_markers = {}  # Store detected markers {id: TrajectoryTarget}
+
         # Publishers
         self.target_pub = rospy.Publisher(
             '/trajectory_tracker/target', TrajectoryTarget, queue_size=1)
+        self.workspace_pub = rospy.Publisher(
+            '/trajectory_tracker/workspace', WorkspaceCalibration, queue_size=1)
+        self.marker_viz_pub = rospy.Publisher(
+            '/trajectory_tracker/marker_visualization', VizMarkerArray, queue_size=1)
 
         # Subscribers
         self.detection_sub = rospy.Subscriber(
             '/marker_detector/detection', TrajectoryTarget, self.detection_callback, queue_size=1)
+        self.marker_array_sub = rospy.Subscriber(
+            '/marker_detector/markers', MarkerArray, self.marker_array_callback, queue_size=1)
         self.camera_info_sub = rospy.Subscriber(
             '/camera/camera_info', CameraInfo, self.camera_info_callback, queue_size=1)
 
         # Services
         self.get_target_srv = rospy.Service(
             '/trajectory_tracker/get_target', GetTargetPosition, self.get_target_service)
+        self.calibrate_workspace_srv = rospy.Service(
+            '/trajectory_tracker/calibrate_workspace', CalibrateWorkspace, self.calibrate_workspace_service)
 
         # TF broadcaster for visualization
         self.tf_broadcaster = tf.TransformBroadcaster()
@@ -280,6 +296,218 @@ class CoordinateTransformerNode:
                 response.confidence = 0.0
 
         return response
+
+    def marker_array_callback(self, msg: MarkerArray):
+        """
+        Store all detected markers for workspace calibration and visualize in RViz.
+        """
+        # Store markers by ID
+        for marker in msg.markers:
+            if marker.valid:
+                self.workspace_markers[marker.marker_id] = marker
+
+        # Visualize all markers in RViz
+        if len(msg.markers) > 0:
+            self._publish_marker_visualization(msg.markers)
+
+    def calibrate_workspace_service(self, req):
+        """
+        Calibrate workspace using two markers.
+
+        This service:
+        1. Detects two markers (specified by marker_id_0 and marker_id_1)
+        2. Transforms their positions to robot frame
+        3. Defines workspace coordinate system based on these two points
+
+        The two markers should be placed at opposite corners of the workspace.
+        """
+        response = CalibrateWorkspaceResponse()
+        response.workspace = WorkspaceCalibration()
+        response.workspace.header.stamp = rospy.Time.now()
+        response.workspace.header.frame_id = "robot_base"
+
+        # Use requested marker IDs or defaults
+        marker_id_0 = req.marker_id_0 if req.marker_id_0 >= 0 else 0
+        marker_id_1 = req.marker_id_1 if req.marker_id_1 >= 0 else 1
+
+        rospy.loginfo(f"Calibrating workspace using markers {marker_id_0} and {marker_id_1}...")
+
+        # Check if both markers are detected
+        if marker_id_0 not in self.workspace_markers:
+            response.success = False
+            response.message = f"Marker ID {marker_id_0} not detected! Place it in camera view."
+            response.workspace.is_calibrated = False
+            return response
+
+        if marker_id_1 not in self.workspace_markers:
+            response.success = False
+            response.message = f"Marker ID {marker_id_1} not detected! Place it in camera view."
+            response.workspace.is_calibrated = False
+            return response
+
+        # Get markers
+        marker_0 = self.workspace_markers[marker_id_0]
+        marker_1 = self.workspace_markers[marker_id_1]
+
+        # Transform marker positions to robot frame
+        try:
+            # For marker_pose mode, use the 3D position from ArUco pose estimation
+            if self.transform_mode == 'marker_pose' and marker_0.position.x != 0:
+                # Markers already have 3D positions in camera frame
+                pos_0_robot = self.camera_to_robot_transform(marker_0.position)
+                pos_1_robot = self.camera_to_robot_transform(marker_1.position)
+            else:
+                # Use pixel coordinates with fixed plane assumption
+                pos_0_robot = self.pixel_to_robot_fixed_plane(marker_0.pixel_x, marker_0.pixel_y)
+                pos_1_robot = self.pixel_to_robot_fixed_plane(marker_1.pixel_x, marker_1.pixel_y)
+
+            self.workspace_corner_0 = pos_0_robot
+            self.workspace_corner_1 = pos_1_robot
+            self.workspace_marker_ids = [marker_id_0, marker_id_1]
+            self.workspace_calibrated = True
+
+            # Calculate workspace dimensions
+            width = abs(pos_1_robot[0] - pos_0_robot[0])
+            height = abs(pos_1_robot[1] - pos_0_robot[1])
+
+            # Fill response
+            response.success = True
+            response.message = f"Workspace calibrated! Size: {width:.3f}m x {height:.3f}m"
+            response.workspace.is_calibrated = True
+            response.workspace.marker_id_0 = marker_id_0
+            response.workspace.marker_id_1 = marker_id_1
+            response.workspace.corner_0.x = pos_0_robot[0]
+            response.workspace.corner_0.y = pos_0_robot[1]
+            response.workspace.corner_0.z = pos_0_robot[2]
+            response.workspace.corner_1.x = pos_1_robot[0]
+            response.workspace.corner_1.y = pos_1_robot[1]
+            response.workspace.corner_1.z = pos_1_robot[2]
+            response.workspace.width = width
+            response.workspace.height = height
+
+            # Publish workspace
+            self.workspace_pub.publish(response.workspace)
+
+            rospy.loginfo(f"Workspace calibrated:")
+            rospy.loginfo(f"  Marker {marker_id_0} at: ({pos_0_robot[0]:.3f}, {pos_0_robot[1]:.3f}, {pos_0_robot[2]:.3f})")
+            rospy.loginfo(f"  Marker {marker_id_1} at: ({pos_1_robot[0]:.3f}, {pos_1_robot[1]:.3f}, {pos_1_robot[2]:.3f})")
+            rospy.loginfo(f"  Workspace size: {width:.3f}m x {height:.3f}m")
+
+        except Exception as e:
+            response.success = False
+            response.message = f"Calibration failed: {str(e)}"
+            response.workspace.is_calibrated = False
+            rospy.logerr(f"Workspace calibration error: {e}")
+
+        return response
+
+    def camera_to_robot_transform(self, point_camera):
+        """Transform a point from camera frame to robot frame."""
+        p_camera = np.array([point_camera.x, point_camera.y, point_camera.z, 1.0])
+        p_robot = self.T_robot_camera @ p_camera
+        return p_robot[:3]
+
+    def _publish_marker_visualization(self, markers):
+        """
+        Publish visualization markers for RViz.
+        Creates spheres at marker positions in robot frame.
+        """
+        viz_array = VizMarkerArray()
+
+        for i, marker in enumerate(markers):
+            if not marker.valid:
+                continue
+
+            # Transform marker position to robot frame
+            if marker.position.x != 0 or marker.position.y != 0 or marker.position.z != 0:
+                # Marker has 3D pose from ArUco
+                pos_robot = self.camera_to_robot_transform(marker.position)
+                rospy.loginfo_throttle(1.0, f"Marker {marker.marker_id} (ArUco pose): ({pos_robot[0]:.3f}, {pos_robot[1]:.3f}, {pos_robot[2]:.3f})")
+            else:
+                # Use pixel coordinates with fixed plane
+                try:
+                    pos_robot = self.pixel_to_robot_fixed_plane(marker.pixel_x, marker.pixel_y)
+                    rospy.loginfo_throttle(1.0, f"Marker {marker.marker_id} (pixel {marker.pixel_x:.0f}, {marker.pixel_y:.0f}): ({pos_robot[0]:.3f}, {pos_robot[1]:.3f}, {pos_robot[2]:.3f})")
+                except Exception as e:
+                    rospy.logwarn_throttle(2.0, f"Failed to transform marker {marker.marker_id}: {e}")
+                    continue
+
+            # Create visualization marker
+            viz_marker = Marker()
+            viz_marker.header.frame_id = "base_link"
+            viz_marker.header.stamp = rospy.Time.now()
+            viz_marker.ns = "aruco_markers"
+            viz_marker.id = marker.marker_id
+            viz_marker.type = Marker.SPHERE
+            viz_marker.action = Marker.ADD
+
+            # Position
+            viz_marker.pose.position.x = pos_robot[0]
+            viz_marker.pose.position.y = pos_robot[1]
+            viz_marker.pose.position.z = pos_robot[2]
+            viz_marker.pose.orientation.w = 1.0
+
+            # Scale (5cm sphere)
+            viz_marker.scale.x = 0.05
+            viz_marker.scale.y = 0.05
+            viz_marker.scale.z = 0.05
+
+            # Color based on marker ID
+            if marker.marker_id == 0:
+                # Red for marker 0
+                viz_marker.color.r = 1.0
+                viz_marker.color.g = 0.0
+                viz_marker.color.b = 0.0
+            elif marker.marker_id == 1:
+                # Green for marker 1
+                viz_marker.color.r = 0.0
+                viz_marker.color.g = 1.0
+                viz_marker.color.b = 0.0
+            else:
+                # Blue for other markers
+                viz_marker.color.r = 0.0
+                viz_marker.color.g = 0.0
+                viz_marker.color.b = 1.0
+            viz_marker.color.a = 0.8
+
+            viz_marker.lifetime = rospy.Duration(0)  # Never expire (until deleted)
+
+            # Add text label
+            text_marker = Marker()
+            text_marker.header = viz_marker.header
+            text_marker.ns = "aruco_labels"
+            text_marker.id = marker.marker_id + 1000
+            text_marker.type = Marker.TEXT_VIEW_FACING
+            text_marker.action = Marker.ADD
+            text_marker.pose.position.x = pos_robot[0]
+            text_marker.pose.position.y = pos_robot[1]
+            text_marker.pose.position.z = pos_robot[2] + 0.05  # Above the sphere
+            text_marker.text = f"ID: {marker.marker_id}"
+            text_marker.scale.z = 0.03  # Text height
+            text_marker.color.r = 1.0
+            text_marker.color.g = 1.0
+            text_marker.color.b = 1.0
+            text_marker.color.a = 1.0
+            text_marker.lifetime = rospy.Duration(0)  # Never expire
+
+            viz_array.markers.append(viz_marker)
+            viz_array.markers.append(text_marker)
+
+            # Also publish TF for each marker
+            self.tf_broadcaster.sendTransform(
+                (pos_robot[0], pos_robot[1], pos_robot[2]),
+                (0, 0, 0, 1),  # quaternion (no rotation)
+                rospy.Time.now(),
+                f"aruco_marker_{marker.marker_id}",
+                "base_link"
+            )
+
+        # Publish visualization
+        if len(viz_array.markers) > 0:
+            rospy.loginfo_throttle(1.0, f"Publishing {len(viz_array.markers)} visualization markers (spheres + labels)")
+            self.marker_viz_pub.publish(viz_array)
+        else:
+            rospy.logwarn_throttle(2.0, "No markers to visualize!")
 
 
 def main():

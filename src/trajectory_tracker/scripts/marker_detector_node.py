@@ -35,7 +35,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import Point
 from cv_bridge import CvBridge
 
-from trajectory_tracker.msg import TrajectoryTarget
+from trajectory_tracker.msg import TrajectoryTarget, MarkerArray
 
 
 class MarkerDetectorNode:
@@ -80,7 +80,7 @@ class MarkerDetectorNode:
             rospy.logwarn(f"Unknown ArUco dict {aruco_dict_name}, using DICT_4X4_50")
             self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 
-        self.aruco_params = cv2.aruco.DetectorParameters()
+        self.aruco_params = cv2.aruco.DetectorParameters_create()
 
         # Camera info storage
         self.camera_matrix = None
@@ -89,6 +89,8 @@ class MarkerDetectorNode:
         # Publishers
         self.detection_pub = rospy.Publisher(
             '/marker_detector/detection', TrajectoryTarget, queue_size=1)
+        self.marker_array_pub = rospy.Publisher(
+            '/marker_detector/markers', MarkerArray, queue_size=1)
         self.debug_image_pub = rospy.Publisher(
             '/marker_detector/debug_image', Image, queue_size=1)
 
@@ -117,15 +119,21 @@ class MarkerDetectorNode:
 
         # Detect based on mode
         if self.detection_mode == 'aruco':
-            detection, debug_frame = self.detect_aruco(frame)
+            detection, marker_array, debug_frame = self.detect_aruco(frame)
         else:
-            detection, debug_frame = self.detect_color(frame)
+            detection, marker_array, debug_frame = self.detect_color(frame)
 
-        # Publish detection
+        # Publish single detection (for backward compatibility)
         if detection is not None:
             detection.header.stamp = msg.header.stamp
             detection.header.frame_id = "camera_link"
             self.detection_pub.publish(detection)
+
+        # Publish marker array (new - for multi-marker support)
+        if marker_array is not None:
+            marker_array.header.stamp = msg.header.stamp
+            marker_array.header.frame_id = "camera_link"
+            self.marker_array_pub.publish(marker_array)
 
         # Publish debug image
         if self.show_debug and debug_frame is not None:
@@ -139,7 +147,7 @@ class MarkerDetectorNode:
     def detect_aruco(self, frame: np.ndarray):
         """
         Detect ArUco markers in the frame.
-        Returns the center of the first detected marker.
+        Returns the center of the first detected marker and all detected markers.
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         debug_frame = frame.copy()
@@ -153,51 +161,75 @@ class MarkerDetectorNode:
         detection.marker_id = -1
         detection.confidence = 0.0
 
+        # Create marker array message
+        marker_array = MarkerArray()
+        marker_array.header.stamp = rospy.Time.now()
+        marker_array.header.frame_id = "camera"
+        marker_array.count = 0
+
         if ids is not None and len(ids) > 0:
             # Draw all detected markers
             cv2.aruco.drawDetectedMarkers(debug_frame, corners, ids)
 
-            # Use the first detected marker
-            marker_corners = corners[0][0]  # Shape: (4, 2)
-            marker_id = ids[0][0]
+            marker_array.count = len(ids)
 
-            # Calculate center of marker
-            center_x = np.mean(marker_corners[:, 0])
-            center_y = np.mean(marker_corners[:, 1])
+            # Process ALL detected markers
+            for i, (corner, marker_id) in enumerate(zip(corners, ids)):
+                marker_corners = corner[0]  # Shape: (4, 2)
+                marker_id = marker_id[0]
 
-            # Estimate pose if camera is calibrated
-            if self.camera_matrix is not None:
-                rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                    corners, self.marker_size, self.camera_matrix, self.dist_coeffs)
+                # Calculate center of marker
+                center_x = np.mean(marker_corners[:, 0])
+                center_y = np.mean(marker_corners[:, 1])
 
-                # Draw axis on debug image
-                cv2.drawFrameAxes(debug_frame, self.camera_matrix, self.dist_coeffs,
-                                  rvecs[0], tvecs[0], self.marker_size * 0.5)
+                # Create detection for this marker
+                marker_detection = TrajectoryTarget()
+                marker_detection.header.stamp = rospy.Time.now()
+                marker_detection.header.frame_id = "camera"
+                marker_detection.valid = True
+                marker_detection.marker_id = int(marker_id)
+                marker_detection.pixel_x = center_x
+                marker_detection.pixel_y = center_y
+                marker_detection.confidence = 1.0
 
-                # Store 3D position from marker pose (in camera frame)
-                detection.position.x = tvecs[0][0][0]
-                detection.position.y = tvecs[0][0][1]
-                detection.position.z = tvecs[0][0][2]
+                # Estimate pose if camera is calibrated
+                if self.camera_matrix is not None:
+                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                        [corner], self.marker_size, self.camera_matrix, self.dist_coeffs)
 
-            # Fill detection message
-            detection.valid = True
-            detection.marker_id = int(marker_id)
-            detection.pixel_x = center_x
-            detection.pixel_y = center_y
-            detection.confidence = 1.0
+                    # Draw axis on debug image
+                    cv2.drawFrameAxes(debug_frame, self.camera_matrix, self.dist_coeffs,
+                                      rvecs[0], tvecs[0], self.marker_size * 0.5)
 
-            # Draw center point
-            cv2.circle(debug_frame, (int(center_x), int(center_y)), 10, (0, 255, 0), -1)
+                    # Store 3D position from marker pose (in camera frame)
+                    marker_detection.position.x = tvecs[0][0][0]
+                    marker_detection.position.y = tvecs[0][0][1]
+                    marker_detection.position.z = tvecs[0][0][2]
 
-            # Display info
-            info_text = f"ID:{marker_id} ({center_x:.0f}, {center_y:.0f})"
-            cv2.putText(debug_frame, info_text, (10, 30),
+                # Add to marker array
+                marker_array.markers.append(marker_detection)
+
+                # Draw center point
+                cv2.circle(debug_frame, (int(center_x), int(center_y)), 10, (0, 255, 0), -1)
+
+                # Display info for each marker
+                info_text = f"ID:{marker_id}"
+                cv2.putText(debug_frame, info_text,
+                           (int(center_x) - 20, int(center_y) - 15),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+            # Use the first detected marker for backward compatibility
+            detection = marker_array.markers[0]
+
+            # Summary text
+            summary = f"Detected {len(ids)} markers"
+            cv2.putText(debug_frame, summary, (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         else:
             cv2.putText(debug_frame, "No marker detected", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-        return detection, debug_frame
+        return detection, marker_array, debug_frame
 
     def detect_color(self, frame: np.ndarray):
         """
@@ -221,9 +253,17 @@ class MarkerDetectorNode:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         detection = TrajectoryTarget()
+        detection.header.stamp = rospy.Time.now()
+        detection.header.frame_id = "camera"
         detection.valid = False
         detection.marker_id = -1  # -1 indicates color detection, not ArUco
         detection.confidence = 0.0
+
+        # Create marker array (for color detection, only one "marker" - the pen tip)
+        marker_array = MarkerArray()
+        marker_array.header.stamp = rospy.Time.now()
+        marker_array.header.frame_id = "camera"
+        marker_array.count = 0
 
         if contours:
             # Find largest contour
@@ -243,6 +283,10 @@ class MarkerDetectorNode:
                     detection.pixel_y = center_y
                     detection.confidence = min(1.0, area / 1000.0)  # Confidence based on area
 
+                    # Add to marker array
+                    marker_array.markers.append(detection)
+                    marker_array.count = 1
+
                     # Draw detection
                     cv2.drawContours(debug_frame, [largest_contour], -1, (0, 255, 0), 2)
                     cv2.circle(debug_frame, (int(center_x), int(center_y)), 10, (0, 255, 0), -1)
@@ -260,7 +304,7 @@ class MarkerDetectorNode:
         mask_bgr = cv2.cvtColor(mask_small, cv2.COLOR_GRAY2BGR)
         debug_frame[0:120, 0:160] = mask_bgr
 
-        return detection, debug_frame
+        return detection, marker_array, debug_frame
 
 
 def main():

@@ -67,6 +67,13 @@
     </node>
 
     <!-- ============================================================
+         Line Extractor Node
+         ============================================================ -->
+    <node name="line_extractor_node" pkg="trajectory_tracker" type="line_extractor_node.py" output="screen">
+        <!-- Color detection settings loaded from YAML -->
+    </node>
+
+    <!-- ============================================================
          RViz for visualization (optional)
          ============================================================ -->
     <node name="rviz" pkg="rviz" type="rviz"

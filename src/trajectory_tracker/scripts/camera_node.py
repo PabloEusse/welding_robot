@@ -57,9 +57,9 @@ class CameraNode:
         self.compressed_pub = rospy.Publisher('/camera/image_compressed', CompressedImage, queue_size=1)
         self.camera_info_pub = rospy.Publisher('/camera/camera_info', CameraInfo, queue_size=1)
 
-        # Open camera
+        # Open camera with V4L2 backend (avoid GStreamer issues)
         rospy.loginfo(f"Opening camera device {self.device_id}...")
-        self.cap = cv2.VideoCapture(self.device_id)
+        self.cap = cv2.VideoCapture(self.device_id, cv2.CAP_V4L2)
 
         if not self.cap.isOpened():
             rospy.logfatal(f"Cannot open camera device {self.device_id}")

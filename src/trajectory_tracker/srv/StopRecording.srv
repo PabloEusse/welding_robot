@@ -1,0 +1,9 @@
+# StopRecording.srv
+# Stop recording and save trajectory
+
+# Request
+---
+# Response
+bool success
+int32 num_waypoints
+string message

@@ -1,0 +1,8 @@
+# PlaybackTrajectory.srv
+# Playback recorded trajectory
+
+# Request
+---
+# Response
+bool success
+string message

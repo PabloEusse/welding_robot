@@ -1,0 +1,11 @@
+# CalibrateWorkspace.srv
+# Calibrate workspace using two markers
+
+# Request
+int32 marker_id_0  # First marker ID (default: 0)
+int32 marker_id_1  # Second marker ID (default: 1)
+---
+# Response
+bool success
+string message
+WorkspaceCalibration workspace

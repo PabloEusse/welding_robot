@@ -17,12 +17,19 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   TrajectoryTarget.msg
+  MarkerArray.msg
+  WorkspaceCalibration.msg
 )
 
 # Generate services
 add_service_files(
   FILES
   GetTargetPosition.srv
+  StartRecording.srv
+  StopRecording.srv
+  PlaybackTrajectory.srv
+  CalibrateWorkspace.srv
+  ExtractLine.srv
 )
 
 generate_messages(
@@ -46,6 +53,7 @@ catkin_install_python(PROGRAMS
   scripts/marker_detector_node.py
   scripts/coordinate_transformer_node.py
   scripts/trajectory_publisher_node.py
+  scripts/line_extractor_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
