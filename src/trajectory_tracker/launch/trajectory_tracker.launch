@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- ============================================================
+         TRAJECTORY TRACKER LAUNCH FILE
+         ============================================================
+         Vision-based trajectory tracking for UR10 welding robot.
+
+         Usage:
+           roslaunch trajectory_tracker trajectory_tracker.launch
+           roslaunch trajectory_tracker trajectory_tracker.launch detection_mode:=color
+           roslaunch trajectory_tracker trajectory_tracker.launch show_gui:=true
+         ============================================================ -->
+
+    <!-- Arguments -->
+    <arg name="device_id" default="0" doc="Camera device ID (0 for /dev/video0)"/>
+    <arg name="width" default="1280" doc="Camera image width"/>
+    <arg name="height" default="720" doc="Camera image height"/>
+    <arg name="fps" default="30" doc="Camera FPS"/>
+    <arg name="show_gui" default="false" doc="Show debug windows"/>
+
+    <arg name="detection_mode" default="aruco" doc="aruco or color"/>
+    <arg name="transform_mode" default="fixed_plane" doc="fixed_plane, marker_pose, or homography"/>
+    <arg name="plane_z" default="0.0" doc="Drawing surface Z height in robot frame"/>
+
+    <arg name="tracking_mode" default="continuous" doc="continuous, waypoint, or trigger"/>
+
+    <!-- Load configuration -->
+    <rosparam file="$(find trajectory_tracker)/config/tracker_config.yaml" command="load"/>
+
+    <!-- ============================================================
+         Camera Node
+         ============================================================ -->
+    <node name="camera_node" pkg="trajectory_tracker" type="camera_node.py" output="screen">
+        <param name="device_id" value="$(arg device_id)"/>
+        <param name="width" value="$(arg width)"/>
+        <param name="height" value="$(arg height)"/>
+        <param name="fps" value="$(arg fps)"/>
+        <param name="show_gui" value="$(arg show_gui)"/>
+        <param name="calibration_file" value="$(find trajectory_tracker)/config/camera_calibration.yaml"/>
+    </node>
+
+    <!-- ============================================================
+         Marker Detector Node
+         ============================================================ -->
+    <node name="marker_detector_node" pkg="trajectory_tracker" type="marker_detector_node.py" output="screen">
+        <param name="detection_mode" value="$(arg detection_mode)"/>
+        <param name="show_debug" value="true"/>
+        <!-- ArUco settings loaded from YAML -->
+        <!-- Color detection settings loaded from YAML -->
+    </node>
+
+    <!-- ============================================================
+         Coordinate Transformer Node
+         ============================================================ -->
+    <node name="coordinate_transformer_node" pkg="trajectory_tracker" type="coordinate_transformer_node.py" output="screen">
+        <param name="transform_mode" value="$(arg transform_mode)"/>
+        <param name="plane_z" value="$(arg plane_z)"/>
+        <!-- Camera-to-robot transform loaded from YAML -->
+    </node>
+
+    <!-- ============================================================
+         Trajectory Publisher Node
+         ============================================================ -->
+    <node name="trajectory_publisher_node" pkg="trajectory_tracker" type="trajectory_publisher_node.py" output="screen">
+        <param name="mode" value="$(arg tracking_mode)"/>
+        <!-- Other settings loaded from YAML -->
+    </node>
+
+    <!-- ============================================================
+         RViz for visualization (optional)
+         ============================================================ -->
+    <node name="rviz" pkg="rviz" type="rviz"
+          args="-d $(find trajectory_tracker)/config/tracker.rviz"
+          if="$(arg show_gui)"/>
+
+</launch>

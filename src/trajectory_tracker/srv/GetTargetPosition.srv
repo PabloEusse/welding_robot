@@ -1,0 +1,10 @@
+# GetTargetPosition.srv
+# Service to get the current detected target position
+
+# Request: empty (just get current detection)
+---
+# Response
+bool success
+string message
+geometry_msgs/Point position
+float64 confidence

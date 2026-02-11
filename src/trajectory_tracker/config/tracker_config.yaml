@@ -1,0 +1,163 @@
+# ==============================================================================
+# TRAJECTORY TRACKER CONFIGURATION
+# ==============================================================================
+#
+# This file contains all configuration parameters for the vision-based
+# trajectory tracking system.
+#
+# ==============================================================================
+
+# ==============================================================================
+# CAMERA SETTINGS
+# ==============================================================================
+camera_node:
+  # Camera device ID (0 = /dev/video0, typically DroidCam)
+  device_id: 0
+
+  # Resolution and FPS
+  width: 1280
+  height: 720
+  fps: 30
+
+  # JPEG compression quality for compressed image topic
+  jpeg_quality: 90
+
+# ==============================================================================
+# MARKER DETECTOR SETTINGS
+# ==============================================================================
+marker_detector_node:
+  # Detection mode: "aruco" or "color"
+  detection_mode: "aruco"
+
+  # --- ArUco Settings ---
+  # Dictionary: DICT_4X4_50, DICT_4X4_100, DICT_5X5_50, DICT_6X6_50, etc.
+  aruco_dict: "DICT_4X4_50"
+
+  # Physical marker size in meters (for pose estimation)
+  marker_size: 0.05  # 5cm
+
+  # --- Color Detection Settings ---
+  # HSV color range for red pen detection
+  # Red wraps around 0/180 in HSV, so we need two ranges
+  # Range 1: 0-10 (low red)
+  color_lower1: [0, 100, 100]
+  color_upper1: [10, 255, 255]
+
+  # Range 2: 160-180 (high red)
+  color_lower2: [160, 100, 100]
+  color_upper2: [180, 255, 255]
+
+  # For BLUE pen, use:
+  # color_lower1: [100, 100, 100]
+  # color_upper1: [130, 255, 255]
+  # color_lower2: [100, 100, 100]  # Same as lower1 for blue
+  # color_upper2: [130, 255, 255]
+
+  # For GREEN pen, use:
+  # color_lower1: [40, 100, 100]
+  # color_upper1: [80, 255, 255]
+  # color_lower2: [40, 100, 100]
+  # color_upper2: [80, 255, 255]
+
+  # Minimum contour area for valid detection (pixels^2)
+  min_area: 100
+
+  # Publish debug visualization image
+  show_debug: true
+
+# ==============================================================================
+# COORDINATE TRANSFORMER SETTINGS
+# ==============================================================================
+coordinate_transformer_node:
+  # Transform mode:
+  #   "fixed_plane"  - Assume flat drawing surface at known Z height
+  #   "marker_pose"  - Use ArUco marker pose estimation
+  #   "homography"   - Use calibrated 4-point homography
+  transform_mode: "fixed_plane"
+
+  # Drawing surface Z height in robot base frame (meters)
+  # Measure the table/paper surface height relative to robot base
+  plane_z: 0.0
+
+  # Camera pose in robot base frame [x, y, z, roll, pitch, yaw]
+  # Adjust these values based on your camera mounting!
+  #
+  # Example: Camera mounted above workspace, looking down
+  #   - Position: 0.5m forward, 0m left/right, 0.8m up
+  #   - Orientation: rotated 180 degrees around X (looking down)
+  camera_to_robot: [0.5, 0.0, 0.8, 3.14159, 0.0, 0.0]
+
+  # If using DroidCam handheld, you'll need to recalibrate frequently
+  # or use ArUco markers for dynamic calibration
+
+# ==============================================================================
+# TRAJECTORY PUBLISHER SETTINGS
+# ==============================================================================
+trajectory_publisher_node:
+  # Operating mode:
+  #   "continuous" - Continuously follow detected marker
+  #   "waypoint"   - Collect waypoints, then execute trajectory
+  #   "trigger"    - Wait for trigger, then move to target
+  mode: "continuous"
+
+  # Minimum movement distance to trigger new target (meters)
+  # Prevents jittery updates from small detection noise
+  min_move_distance: 0.01  # 1cm
+
+  # Exponential smoothing factor (0.0 = no smoothing, 1.0 = no filtering)
+  # Lower values = smoother but slower response
+  smoothing_alpha: 0.3
+
+  # Z offset added to detected position (meters)
+  # Use this to adjust pen contact height
+  target_z_offset: 0.0
+
+  # Approach height above target for safe moves (meters)
+  approach_height: 0.05  # 5cm
+
+  # Maximum velocity for trajectory following (m/s)
+  max_velocity: 0.1
+
+  # Publishing rate (Hz)
+  publish_rate: 30.0
+
+# ==============================================================================
+# CALIBRATION GUIDE
+# ==============================================================================
+#
+# STEP 1: Camera Calibration
+# --------------------------
+# Run camera calibration to get accurate intrinsics:
+#   rosrun camera_calibration cameracalibrator.py \
+#     --size 8x6 --square 0.025 \
+#     image:=/camera/image_raw camera:=/camera
+#
+# Save calibration to config/camera_calibration.yaml
+#
+#
+# STEP 2: Camera-to-Robot Calibration
+# -----------------------------------
+# Option A: Hand-eye calibration (most accurate)
+#   - Mount marker on robot end-effector
+#   - Collect poses at multiple positions
+#   - Solve AX=XB problem
+#
+# Option B: Manual measurement (quick setup)
+#   - Measure camera position relative to robot base
+#   - Enter values in camera_to_robot parameter
+#
+#
+# STEP 3: Plane Calibration
+# -------------------------
+# Measure the Z height of your drawing surface relative to robot base.
+# Enter this value in plane_z parameter.
+#
+#
+# STEP 4: Test and Tune
+# ---------------------
+# 1. Run: roslaunch trajectory_tracker trajectory_tracker.launch show_gui:=true
+# 2. Check /marker_detector/debug_image for detection quality
+# 3. Check /trajectory_tracker/target for transformed positions
+# 4. Adjust smoothing_alpha if tracking is too jittery or too slow
+#
+# ==============================================================================
