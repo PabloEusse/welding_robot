@@ -80,6 +80,7 @@ namespace tum_ics_ur_robot_lli
       ControllerType controller_type_;
       ControlSpace control_space_;
 
+
       // Time parameters
       double t_INIT_;
       double t_LINEAR_;
@@ -93,6 +94,11 @@ namespace tum_ics_ur_robot_lli
       Vector3d X_;         // Current Cartesian position (3D)
       Vector6d last_q_;    // Joint position at last state transition
       Vector3d last_X_;    // Cartesian position at last state transition
+
+      //adding offset
+      Vector6d offset;
+      JointState state_adj;
+      Vector3d x_des_template;
 
       // Trajectory parameters
       Vector6d start_track_pose_;   // Joint pose for tracking start

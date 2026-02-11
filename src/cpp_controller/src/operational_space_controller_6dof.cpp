@@ -37,12 +37,14 @@ namespace tum_ics_ur_robot_lli
       // Initialize time parameters (matching Python)
       t_INIT_ = 10.0;    // Was 5.0, Python uses 10.0
       t_LINEAR_ = 10.0;
-      t_TRACK_SLOW_ = 40.0;
-      t_TRACK_FAST_ = 40.0;  // Match Python's 40s
+      t_TRACK_SLOW_ = 100.0;
+      t_TRACK_FAST_ = 100.0;  // Match Python's 40s
 
       // Initialize poses
       start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0.0, 0.0, 0.0;
       non_singular_pose_ << 0.0, 0.0, -M_PI / 2.0, 0.0, 0.0, 0.0;  // Match Python
+      // test good starting pose for following linear motion: 0, -90, -90, -90, 90, 0;
+      non_singular_pose_ << 0, -M_PI/2, -M_PI/2, -M_PI/2, M_PI/2, 0;
       
       // Initialize circular trajectory parameters
       orbital_center_.setZero();
@@ -168,16 +170,25 @@ namespace tum_ics_ur_robot_lli
     }
     Vector6d OperationalSpaceController6DOF::update(const RobotTime &time, const JointState &state)
     {
+      JointState state_adj = state;
+      Vector6d offset;
+      offset << 0,  M_PI/2, 0, M_PI/2, 0, 0;
+      //offset << 0, 0, 0, 0, 0, 0;
+
+      state_adj.q += offset;
+      // Vector6d offset;
+      // offset << 0,  M_PI/2, 0, M_PI/2, 0, 0;
+      // state_adj.q +=  offset;
       // First iteration initialization
       if (is_first_iter_)
       {
-        q_start_ = state.q;
+        q_start_ = state_adj.q;
         t0_ = time.tD();
         last_t_ = t0_;
-        last_q_ = state.q;
+        last_q_ = state_adj.q;
 
         // Get initial Cartesian position using our FK
-        X_ = getEndEffectorPosition(state.q);
+        X_ = getEndEffectorPosition(state_adj.q);
         last_X_ = X_;
 
         ROS_WARN_STREAM("START [RAD]: \n" << q_start_.transpose());
@@ -191,8 +202,9 @@ namespace tum_ics_ur_robot_lli
       }
 
       // Update current state
-      q_ = state.q;
-      X_ = getEndEffectorPosition(state.q);
+      q_ = state_adj.q;
+      //q_ -= [0, M_PI/2, 0, M_PI/2, 0, 0];
+      X_ = getEndEffectorPosition(state_adj.q);
 
       // Calculate elapsed time
       double t_elapsed = time.tD() - t0_;
@@ -204,7 +216,7 @@ namespace tum_ics_ur_robot_lli
       // Check for singularity (manipulability)
       if (control_space_ == ControlSpace::CARTESIAN)
       {
-        Eigen::Matrix<double, 6, 6> J = computeJacobian(state.q);
+        Eigen::Matrix<double, 6, 6> J = computeJacobian(state_adj.q);
         double w = computeManipulability(J);
         if (w < 0.0)
         {
@@ -226,18 +238,19 @@ namespace tum_ics_ur_robot_lli
 
       if (control_space_ == ControlSpace::JOINT)
       {
-        tau = jointSpaceController(state, q_des, qdot_des, qddot_des, dt);
+        tau = jointSpaceController(state_adj, q_des, qdot_des, qddot_des, dt);
+        X_ = getEndEffectorPosition(q_);
       }
       else // CARTESIAN
       {
-        Vector3d xdot_current = getEndEffectorVelocity(state.q, state.qp);
+        Vector3d xdot_current = getEndEffectorVelocity(state_adj.q, state_adj.qp);
         
         // DEBUG: Log x_des to verify it's not zero
         ROS_INFO_STREAM_THROTTLE(0.5, "[CART] x_des=" << x_des.transpose() 
                                  << " X_=" << X_.transpose()
                                  << " delta=" << (X_ - x_des).transpose());
         
-        tau = cartesianSpaceController(state, X_, xdot_current, x_des, xdot_des, xddot_des, dt);
+        tau = cartesianSpaceController(state_adj, X_, xdot_current, x_des, xdot_des, xddot_des, dt);
       }
 
       // Publish debug data
@@ -246,13 +259,13 @@ namespace tum_ics_ur_robot_lli
       msg.time = time.tD();
       for (int i = 0; i < STD_DOF; i++)
       {
-        msg.q[i] = state.q(i);
-        msg.qp[i] = state.qp(i);
-        msg.qpp[i] = state.qpp(i);
+        msg.q[i] = state_adj.q(i);
+        msg.qp[i] = state_adj.qp(i);
+        msg.qpp[i] = state_adj.qpp(i);
         msg.qd[i] = q_des(i);
         msg.qpd[i] = qdot_des(i);
-        msg.Dq[i] = state.q(i) - q_des(i);
-        msg.Dqp[i] = state.qp(i) - qdot_des(i);
+        msg.Dq[i] = state_adj.q(i) - q_des(i);
+        msg.Dqp[i] = state_adj.qp(i) - qdot_des(i);
         msg.torques[i] = tau(i);
       }
       control_data_pub_.publish(msg);
@@ -284,7 +297,7 @@ namespace tum_ics_ur_robot_lli
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        last_X_ = X_;
+        //last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ + t_LINEAR_ && 
                current_state_ == State::LINEAR)
@@ -293,7 +306,7 @@ namespace tum_ics_ur_robot_lli
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        last_X_ = X_;
+        //last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ && current_state_ == State::INIT)
       {
@@ -302,7 +315,7 @@ namespace tum_ics_ur_robot_lli
         //last_t_ = t_elapsed + t0_;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        last_X_ = X_;
+        //last_X_ = X_;
       }
 
       // If state changed, update transition variables
@@ -328,7 +341,7 @@ namespace tum_ics_ur_robot_lli
         // We need to store the controller time at transition, not wall clock time
         last_t_ = t_elapsed + t0_;  // Convert back to absolute controller time
         // last_q_ = q_;
-        // last_X_ = X_;
+        last_X_ = X_;
       }
     }
     void OperationalSpaceController6DOF::generateTrajectory(double t,
@@ -377,9 +390,31 @@ namespace tum_ics_ur_robot_lli
         break;
 
       case State::LINEAR:
+      {
+
+
+        Vector3d x_des_template;
+        x_des_template(0) = ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
+        x_des_template(1) = ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
+        x_des_template(2) = ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
+
         // Linear interpolation in Cartesian space to tracking start position
-        x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
+        x_des = last_X_ + x_des_template;
+
+
+        // [ INFO] [1770816707.364589070]: [CART] x_des=0.250991  0.38421  1.11084 X_= 1.11084 0.250991  0.38421 delta= 0.859846 -0.133219 -0.726626
+
+        //Vector3d x_des_template;
+        //x_des_template = x_des;
+        //doents work -> needs ramp up for due to too fast joint velocity
+        // x_des(0) = x_des_template(1);
+        // x_des(1) = x_des_template(2);
+        // x_des(2) = x_des_template(0);
+
+        
+
         break;
+      }
 
       case State::TRACK_SLOW:
       {
@@ -393,11 +428,13 @@ namespace tum_ics_ur_robot_lli
         // So orbital_center_ was set to last_X_ - [radius, 0, 0] in updateStateMachine
         x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
         x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
-        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
+        //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
+        x_des(2) = orbital_center_(2);
 
         xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega * std::cos(theta);
-        xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
+        //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
+        xdot_des(2) = 0; 
         break;
       }
 
@@ -408,11 +445,13 @@ namespace tum_ics_ur_robot_lli
         
         x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
         x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
-        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z_fast * theta);
+        //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z_fast * theta);
+        x_des(2) = orbital_center_(2);
 
         xdot_des(0) = -circle_radius_ * omega_fast * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega_fast * std::cos(theta);
-        xdot_des(2) = vertical_amplitude_ * omega_z_fast * std::cos(omega_z_fast * theta);
+        //xdot_des(2) = vertical_amplitude_ * omega_z_fast * std::cos(omega_z_fast * theta);
+        xdot_des(2) = 0;
         break;
       }
 
