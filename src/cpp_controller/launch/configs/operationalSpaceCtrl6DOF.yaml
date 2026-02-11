@@ -24,3 +24,77 @@ operational_space_ctrl:
   
   # TRACK_FAST: Fast circular trajectory tracking
   t_track_fast: 40.0
+
+  # Enable admittance control for force tracking
+  use_admittance: true
+
+# ==============================================================================
+# ADMITTANCE FILTER CONFIGURATION
+# ==============================================================================
+#
+# THEORY:
+# -------
+# Admittance control makes the robot behave like a virtual mass-spring-damper:
+#
+#     M * x_ddot + D * x_dot + K * x = F_ext - F_des
+#
+# Rearranged:
+#
+#     x_ddot = (1/M) * (F_ext - F_des - D*x_dot - K*x)
+#
+# The resulting offset 'x' is added to the desired trajectory.
+#
+# PARAMETER TUNING GUIDE:
+# -----------------------
+# 1. Start with high damping (D) to avoid oscillation
+# 2. Reduce mass (M) for faster response, but too low causes instability
+# 3. Set stiffness (K) = 0 for pure force tracking
+#    Set stiffness (K) > 0 if you want the robot to return to original path
+#
+# SIGN CONVENTION:
+# ----------------
+# - Positive Z points UP
+# - F_des = [0, 0, -5] means 5N pushing DOWN onto surface
+# - When robot pushes too hard (F_ext.z < F_des.z), x.z increases (moves UP)
+# - When robot pushes too soft (F_ext.z > F_des.z), x.z decreases (moves DOWN)
+#
+# ==============================================================================
+
+admittance:
+  # Virtual mass [kg]
+  # - Determines response speed: x_ddot = F/M
+  # - Larger M = slower, more stable response
+  # - Smaller M = faster response, but can oscillate
+  # - Typical range: 1.0 - 10.0 kg
+  # [X, Y, Z]
+  mass: [5.0, 5.0, 2.0]
+
+  # Virtual damping [Ns/m]
+  # - Provides viscous friction: F_damping = -D * x_dot
+  # - Larger D = less oscillation, overdamped behavior
+  # - Critical damping: D_crit = 2 * sqrt(K * M)
+  # - Typical range: 20.0 - 200.0 Ns/m
+  # [X, Y, Z]
+  damping: [100.0, 100.0, 40.0]
+
+  # Virtual stiffness [N/m]
+  # - Provides spring force: F_spring = -K * x
+  # - K = 0: pure force tracking (no position memory)
+  # - K > 0: returns to original trajectory when force removed
+  # - Typical range: 0.0 - 500.0 N/m
+  # [X, Y, Z]
+  stiffness: [0.0, 0.0, 0.0]
+
+  # Desired contact force [N]
+  # - The force the robot should maintain on the surface
+  # - Negative Z = pushing down (into the surface)
+  # - For end effector drawing: typically -3 to -10 N
+  # [Fx, Fy, Fz]
+  desired_force: [0.0, 0.0, -5.0]
+
+  # Safety limits
+  # Maximum position offset [m] - prevents runaway
+  max_offset: [0.05, 0.05, 0.05]
+
+  # Maximum velocity [m/s] - prevents fast movements
+  max_velocity: [0.1, 0.1, 0.1]

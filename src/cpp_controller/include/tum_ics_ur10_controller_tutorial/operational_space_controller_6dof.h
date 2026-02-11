@@ -2,10 +2,12 @@
 #define UR_ROBOT_LLI_OPERATIONAL_SPACE_CONTROLLER_6DOF_H
 
 #include <tum_ics_ur_robot_lli/RobotControllers/ControlEffort.h>
+#include <tum_ics_ur10_controller_tutorial/AdmittanceFilter.h>
 #include <ur_model/ur_model.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <std_msgs/Float32.h>
 #include <Eigen/Dense>
+#include <memory>
 
 namespace tum_ics_ur_robot_lli
 {
@@ -111,6 +113,11 @@ namespace tum_ics_ur_robot_lli
       double d1_, a2_, a3_, d4_, d5_, d6_;
 
       ur::URModel model_;
+
+      // Admittance filter for force control
+      std::unique_ptr<AdmittanceFilter> admittance_filter_;
+      bool use_admittance_;
+      ros::Publisher admittance_pub_;  // Debug publisher
 
     public:
       /**

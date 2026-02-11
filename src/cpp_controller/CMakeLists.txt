@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   std_msgs
+  geometry_msgs
   tf
   tf_conversions
 )
@@ -54,7 +55,7 @@ set(CMAKE_CXX_FLAGS "${Qt5Widgets_EXECUTABLE_COMPILE_FLAGS}")
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES my_robot_control_lli
-  CATKIN_DEPENDS tum_ics_ur_robot_msgs roscpp rospy sensor_msgs std_msgs tf tf_conversions visualization_msgs tum_ics_ur_robot_lli
+  CATKIN_DEPENDS tum_ics_ur_robot_msgs roscpp rospy sensor_msgs std_msgs geometry_msgs tf tf_conversions visualization_msgs tum_ics_ur_robot_lli
   DEPENDS ${DEPENDS_VAR}
 )
 
@@ -82,6 +83,7 @@ file(GLOB_RECURSE MY_CTRL_INC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} FOLLOW_SYMLIN
 add_library(my_robot_control_lli
    src/simple_effort_controller.cpp
    src/operational_space_controller_6dof.cpp
+   src/AdmittanceFilter.cpp
    ${MY_CTRL_INC}
 )
 target_link_libraries(my_robot_control_lli

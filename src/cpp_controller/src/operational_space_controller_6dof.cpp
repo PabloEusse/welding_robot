@@ -68,7 +68,12 @@ namespace tum_ics_ur_robot_lli
       steady_state_error_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/steady_state_error", 10);
       cartesian_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/cart_coor", 10);
       control_data_pub_ = nh_.advertise<tum_ics_ur_robot_msgs::ControlData>("operational_space_controller_data", 1);
-      
+      admittance_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/admittance_state", 10);
+
+      // Initialize admittance filter
+      admittance_filter_ = std::make_unique<AdmittanceFilter>(nh_, "/schunk_netbox/raw");
+      use_admittance_ = false;  // Disabled by default, enable via parameter
+
     }
 
     OperationalSpaceController6DOF::~OperationalSpaceController6DOF()
@@ -139,10 +144,20 @@ namespace tum_ics_ur_robot_lli
       ROS_WARN_STREAM("Kp_PD: \n" << Kp_PD_);
       ROS_WARN_STREAM("Kd_PD: \n" << Kd_PD_);
       ROS_WARN_STREAM("Kreg_PD: \n" << Kreg_PD_);
-      ROS_WARN_STREAM("Time params - INIT: " << t_INIT_ << ", LINEAR: " << t_LINEAR_ 
+      ROS_WARN_STREAM("Time params - INIT: " << t_INIT_ << ", LINEAR: " << t_LINEAR_
                       << ", TRACK_SLOW: " << t_TRACK_SLOW_ << ", TRACK_FAST: " << t_TRACK_FAST_);
 
-
+      // Initialize admittance filter
+      ros::param::get(ns + "/use_admittance", use_admittance_);
+      if (use_admittance_)
+      {
+        admittance_filter_->init("~admittance");
+        ROS_WARN_STREAM("Admittance control ENABLED");
+      }
+      else
+      {
+        ROS_INFO_STREAM("Admittance control disabled");
+      }
 
       return true;
     }
@@ -446,10 +461,56 @@ namespace tum_ics_ur_robot_lli
 
       Vector6d Yr_theta; // Placeholder for regressor-based adaptive control term
 
-      // Cartesian errors
-      Vector3d delta_x = x_current - x_des;
-      // ROS_WARN_STREAM("delta_x: " << delta_x.transpose());  
-      Vector3d delta_xdot = xdot_current - xdot_des;
+      // ======================================================================
+      // ADMITTANCE CONTROL INTEGRATION
+      // ======================================================================
+      // The admittance filter computes a position offset based on external
+      // forces measured by the FT sensor.
+      //
+      // Modified desired trajectory:
+      //
+      //     x_des_modified   = x_des_trajectory + x_admittance
+      //     xdot_des_modified = xdot_des_trajectory + xdot_admittance
+      //
+      // This allows the robot to:
+      //   1. Follow the planned trajectory (x_des_trajectory)
+      //   2. Comply with external forces (x_admittance offset)
+      //
+      // For end effector drawing:
+      //   - X,Y follow trajectory exactly (x_admittance.xy = 0)
+      //   - Z adjusts to maintain constant contact force
+      // ======================================================================
+      Vector3d x_des_modified = x_des;
+      Vector3d xdot_des_modified = xdot_des;
+
+      if (use_admittance_ && admittance_filter_)
+      {
+        // Get admittance offset: x_a from M*x_ddot + D*x_dot + K*x = F_ext - F_des
+        Vector3d x_offset = admittance_filter_->update(dt);
+        Vector3d xdot_offset = admittance_filter_->getVelocityOffset();
+
+        // Modify desired trajectory with admittance offset
+        x_des_modified = x_des + x_offset;
+        xdot_des_modified = xdot_des + xdot_offset;
+
+        // Publish admittance state for debugging
+        std_msgs::Float32MultiArray adm_msg;
+        Vector3d F_ext = admittance_filter_->getExternalForce();
+        adm_msg.data = {
+          static_cast<float>(x_offset(0)),
+          static_cast<float>(x_offset(1)),
+          static_cast<float>(x_offset(2)),
+          static_cast<float>(F_ext(0)),
+          static_cast<float>(F_ext(1)),
+          static_cast<float>(F_ext(2))
+        };
+        admittance_pub_.publish(adm_msg);
+      }
+
+      // Cartesian errors (use modified desired if admittance is enabled)
+      Vector3d delta_x = x_current - x_des_modified;
+      // ROS_WARN_STREAM("delta_x: " << delta_x.transpose());
+      Vector3d delta_xdot = xdot_current - xdot_des_modified;
 
       // Update integral error
       integral_error_acc_ += delta_x * dt;
