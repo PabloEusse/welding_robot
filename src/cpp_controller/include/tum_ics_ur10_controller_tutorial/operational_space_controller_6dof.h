@@ -72,6 +72,7 @@ namespace tum_ics_ur_robot_lli
       ros::Publisher cartesian_pub_;
       ros::Publisher traj_pose_pub_;
       ros::Publisher traj_path_pub_;
+      ros::Publisher tf_pub_;
 
       // Gain matrices (3x3 for Cartesian control)
       Matrix3d Kp_PD_;
@@ -107,6 +108,8 @@ namespace tum_ics_ur_robot_lli
       Vector6d offset;
       JointState state_adj;
       Vector3d x_des_template;
+      
+
 
       // Trajectory parameters
       Vector6d q0_;

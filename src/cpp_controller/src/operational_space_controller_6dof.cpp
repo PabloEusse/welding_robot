@@ -28,6 +28,9 @@ namespace tum_ics_ur_robot_lli
       d6_ = 0.0922;   // Link offset d6
       // Initialize gain matrices
       Kp_PD_ = 5.0 * Matrix3d::Identity();
+      Kp_PD_ << 5.0, 0.0, 0.0,
+                0.0, 5.0, 0.0,
+                0.0, 0.0, 500.0;
       Kd_PD_ = 2.0 * Matrix3d::Identity();
       Kreg_PD_ = Matrix6d::Zero();
       Kreg_PD_.block<3, 3>(0, 0) = 40.0 * Matrix3d::Identity();
@@ -184,8 +187,8 @@ namespace tum_ics_ur_robot_lli
     {
       JointState state_adj = state;
       Vector6d offset;
-      offset << 0,  M_PI/2, 0, M_PI/2, 0, 0;
-      //offset << 0, 0, 0, 0, 0, 0;
+      //offset << 0,  M_PI/2, 0, M_PI/2, 0, 0;
+      offset << 0, 0, 0, 0, 0, 0;
 
       //state_adj.q += offset;
       // Vector6d offset;
@@ -273,7 +276,13 @@ namespace tum_ics_ur_robot_lli
       // Compute control torque
       Vector6d tau;
       tau.setZero();
-
+      
+      Vector3d xdot_current = getEndEffectorVelocity(state_adj.q, state_adj.qp);
+      std_msgs::Float32MultiArray x_msg;
+      x_msg.data = {static_cast<float>(xdot_current(0)), 
+                    static_cast<float>(xdot_current(1)), 
+                    static_cast<float>(xdot_current(2))};
+      cartesian_pub_.publish(x_msg);
       if (control_space_ == ControlSpace::JOINT)
       {
         tau = jointSpaceController(state_adj, q_des, qdot_des, qddot_des, dt);
@@ -287,7 +296,7 @@ namespace tum_ics_ur_robot_lli
         ROS_INFO_STREAM_THROTTLE(0.5, "[CART] x_des=" << x_des.transpose() 
                                  << " X_=" << X_.transpose()
                                  << " delta=" << (X_ - x_des).transpose());
-        
+        X_ = getEndEffectorPosition(q_);
         tau = cartesianSpaceController(state_adj, X_, xdot_current, x_des, xdot_des, xddot_des, dt);
       }
 
@@ -371,9 +380,21 @@ namespace tum_ics_ur_robot_lli
           // orbital_center_ is offset from the current Cartesian position
           // In Python: c = self.linear_start_pose (which is where LINEAR ends)
           // The circle is centered such that the initial point is on the circle
-          orbital_center_ = X_;  // Start circle from current position
-          orbital_center_(0) -= circle_radius_;  // Offset so we start at angle=0 on the circle
-          ROS_INFO_STREAM("Computed orbital_center_: " << orbital_center_.transpose());
+          // orbital_center_ = X_;  // Start circle from current position
+          // //orbital_center_ << 0.5, 0.0, 0.1; // Override with fixed center for testing
+          // orbital_center_(0) -= circle_radius_;  // Offset so we start at angle=0 on the circle
+          // ROS_INFO_STREAM("Computed orbital_center_: " << orbital_center_.transpose());
+          
+          ROS_WARN_STREAM("[TRANSITION LINEAR→TRACK_SLOW]");
+          ROS_WARN_STREAM("  Current X_: " << X_.transpose());
+          ROS_WARN_STREAM("  orbital_center_ BEFORE: " << orbital_center_.transpose());
+          
+          orbital_center_ = X_;
+          orbital_center_(0) -= circle_radius_;
+          
+          ROS_WARN_STREAM("  orbital_center_ AFTER: " << orbital_center_.transpose());
+          ROS_WARN_STREAM("  last_X_: " << last_X_.transpose());
+          ROS_WARN_STREAM("  Z offset captured: " << orbital_center_(2));
         }
         
         current_state_ = new_state;
@@ -409,6 +430,7 @@ namespace tum_ics_ur_robot_lli
       omega_fast *= 4.0;
       omega_z_fast *= 4.0;
 
+      // amplitude seems not been used
       Vector3d amplitude;
       amplitude << track_pos_cartesian(0), track_pos_cartesian(0), 0.05;
 
@@ -433,24 +455,11 @@ namespace tum_ics_ur_robot_lli
 
       case State::LINEAR:
       {
-
-
-        
-
         // Linear interpolation in Cartesian space to tracking start position
-        x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
+        x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;\
 
-        // [ INFO] [1770816707.364589070]: [CART] x_des=0.250991  0.38421  1.11084 X_= 1.11084 0.250991  0.38421 delta= 0.859846 -0.133219 -0.726626
-
-        //Vector3d x_des_template;
-        //x_des_template = x_des;
-        //doents work -> needs ramp up for due to too fast joint velocity
-        // x_des(0) = x_des_template(1);
-        // x_des(1) = x_des_template(2);
-        // x_des(2) = x_des_template(0);
-
-        
-
+        // NOTE: adding xdot_des here didnt change anything?
+        // xdot_des = (track_pos_cartesian - last_X_) / t_LINEAR_;
         break;
       }
 
@@ -469,10 +478,11 @@ namespace tum_ics_ur_robot_lli
         //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
         x_des(2) = orbital_center_(2);
 
-        xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
-        xdot_des(1) = circle_radius_ * omega * std::cos(theta);
-        //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
-        xdot_des(2) = 0; 
+        // totally removing x_dot_des makes no difference, robot still occilates in z direction
+        // xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
+        // xdot_des(1) = circle_radius_ * omega * std::cos(theta);
+        // //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
+        // xdot_des(2) = 0; 
         break;
       }
 
@@ -583,6 +593,7 @@ namespace tum_ics_ur_robot_lli
         };
         admittance_pub_.publish(adm_msg);
       }
+      
       std_msgs::Float32MultiArray x_des_msg;
       x_des_msg.data = {static_cast<float>(x_des(0)), 
                         static_cast<float>(x_des(1)), 
@@ -599,6 +610,7 @@ namespace tum_ics_ur_robot_lli
 
       // Get full Jacobian and extract translational part (rows 0-2)
       Eigen::Matrix<double, 6, 6> J_full = computeJacobian(state.q);
+      // NOTE: Robot gets unstable, if we use (3,0) -> hence (3,0) is the rotational part and (0,0) is the translational part of the Jacobian
       Eigen::Matrix<double, 3, 6> J_ee = J_full.block<3, 6>(0, 0);  // Translational Jacobian
 
       // Compute pseudoinverse of Jacobian
@@ -606,7 +618,6 @@ namespace tum_ics_ur_robot_lli
 
       Eigen::Matrix<double,6,6> Jdot_ee_w  = computeJacobianDotTranslational(state.q, state.qp);
       Eigen::Matrix<double, 3, 6> Jdot_ee_w_translation = Jdot_ee_w.block<3, 6>(0, 0); // Get translational part of Jacobian derivative in world frame
-      //Eigen::Matrix<double, 3, 6> Jdot_e_w_linear = Jdot_ee_w.block<3, 6>(3, 0); // Extract translational part of Jacobian derivative
       //PD controller seems to be correctly
       if (controller_type_ == ControllerType::PD)
       {
@@ -625,11 +636,7 @@ namespace tum_ics_ur_robot_lli
         //Vector6d theta -= (ro * (Yr.transpose() * S_q)) * dt; // Update adaptive parameters using gradient descent
         Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
         // Simple PD control (can be extended with adaptive control)
-        tau = -Kreg_PD_ * S_q + Yr_theta;
-
-
-        
-       
+        tau = -Kreg_PD_ * S_q ;//+ Yr_theta;
       }
       else if (controller_type_ == ControllerType::PID)
       {
@@ -655,16 +662,16 @@ namespace tum_ics_ur_robot_lli
                         static_cast<float>(delta_x(2))};
       steady_state_error_pub_.publish(delta_msg);
 
-      std_msgs::Float32MultiArray x_des_msg;
+      //std_msgs::Float32MultiArray x_des_msg;
       x_des_msg.data = {static_cast<float>(x_des(0)),
                         static_cast<float>(x_des(1)),
                         static_cast<float>(x_des(2))};
       joint_states_des_pub_.publish(x_des_msg);
 
       std_msgs::Float32MultiArray x_msg;
-      x_msg.data = {static_cast<float>(x_current(0)), 
-                    static_cast<float>(x_current(1)), 
-                    static_cast<float>(x_current(2))};
+      x_msg.data = {static_cast<float>(xdot_current(0)), 
+                    static_cast<float>(xdot_current(1)), 
+                    static_cast<float>(xdot_current(2))};
       cartesian_pub_.publish(x_msg);
 
       return tau;
@@ -825,5 +832,49 @@ namespace tum_ics_ur_robot_lli
       return Yr_theta;
     }
 
+    // verification function for jacobian cal
+    /*python version:
+      # =========================================================
+    # Debug Jacobian checker (optional, runs once)
+    # =========================================================
+    def _debug_jacobian_full(self, q):
+        eps = 1e-6
+        n = self.nq
+
+        J6 = np.array(self.model.J_ee_w_fn(*q.flatten()), dtype=float)
+        J_top = J6[0:3, :]
+        J_bot = J6[3:6, :]
+
+        J_num = np.zeros((3, n))
+        x0 = self._fk_pos(q)
+        for i in range(n):
+            q_p = q.copy()
+            q_m = q.copy()
+            q_p[i, 0] += eps
+            q_m[i, 0] -= eps
+            x_p = self._fk_pos(q_p)
+            x_m = self._fk_pos(q_m)
+            J_num[:, i] = ((x_p - x_m) / (2.0 * eps)).flatten()
+
+        rospy.logwarn("====== Jacobian FULL check (position) ======")
+        rospy.logwarn(f"J_num (pos, from FK) =\n{J_num}")
+        rospy.logwarn(f"J6 top(0:3) =\n{J_top}")
+        rospy.logwarn(f"J6 bot(3:6) =\n{J_bot}")
+
+        for blk_name, Jblk in [("top(0:3)", J_top), ("bot(3:6)", J_bot)]:
+            rospy.logwarn(f"---- Matching columns against {blk_name} ----")
+            for i in range(n):
+                errs = [np.linalg.norm(J_num[:, i] - Jblk[:, j]) for j in range(n)]
+                j_best = int(np.argmin(errs))
+                rospy.logwarn(
+                    f"joint {i}: best match col {j_best} err={errs[j_best]:.4e} "
+                    f"all={['%.2e' % e for e in errs]}"
+                )
+
+        if hasattr(self.model, "Jp_ee_w_fk_fn"):
+            J_fk = np.array(self.model.Jp_ee_w_fk_fn(*q.flatten()), dtype=float)
+            rospy.logwarn(f"Jp_fk (d FK pos / d q) =\n{J_fk}")
+            rospy.logwarn(f"||J_num - Jp_fk|| = {np.linalg.norm(J_num - J_fk):.4e}")*/
+      //cpp version
   } // namespace RobotControllers
 } // namespace tum_ics_ur_robot_lli
