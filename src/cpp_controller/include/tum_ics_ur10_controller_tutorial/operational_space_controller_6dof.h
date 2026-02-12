@@ -6,8 +6,6 @@
 #include <ur_model/ur_model.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <std_msgs/Float32.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <nav_msgs/Path.h>
 #include <Eigen/Dense>
 #include <memory>
 #include <tf2_ros/transform_broadcaster.h>
@@ -70,6 +68,7 @@ namespace tum_ics_ur_robot_lli
       ros::Publisher lyapunov_pub_;
       ros::Publisher steady_state_error_pub_;
       ros::Publisher cartesian_pub_;
+      ros::Publisher tf_pub_;
       ros::Publisher traj_pose_pub_;
       ros::Publisher traj_path_pub_;
 
