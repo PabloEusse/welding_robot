@@ -8,6 +8,9 @@
 #include <std_msgs/Float32.h>
 #include <Eigen/Dense>
 #include <memory>
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/TransformStamped.h>
+#include <tf2_msgs/TFMessage.h>
 
 namespace tum_ics_ur_robot_lli
 {
@@ -57,7 +60,7 @@ namespace tum_ics_ur_robot_lli
       JointState q_init_;
       JointState q_home_;
       JointState q_park_;
-
+      
       // ROS communication
       ros::NodeHandle nh_;
       ros::Publisher control_data_pub_;
@@ -65,11 +68,12 @@ namespace tum_ics_ur_robot_lli
       ros::Publisher lyapunov_pub_;
       ros::Publisher steady_state_error_pub_;
       ros::Publisher cartesian_pub_;
-
+      ros::Publisher tf_pub_; 
       // Gain matrices (3x3 for Cartesian control)
       Matrix3d Kp_PD_;
       Matrix3d Kd_PD_;
       Matrix6d Kreg_PD_;  // 6x6 for joint space regularization
+      Matrix6d Kreg_PD_cart_;
 
       Matrix3d Kp_PID_;
       Matrix3d Kd_PID_;
@@ -101,6 +105,7 @@ namespace tum_ics_ur_robot_lli
       Vector3d x_des_template;
 
       // Trajectory parameters
+      Vector6d q0_;
       Vector6d start_track_pose_;   // Joint pose for tracking start
       Vector6d non_singular_pose_;  // Safe non-singular pose
       Vector3d orbital_center_;     // Center of circular trajectory (like Python)
@@ -150,6 +155,10 @@ namespace tum_ics_ur_robot_lli
 
       // State machine
       void updateStateMachine(double t_elapsed);
+
+      void publishTF_raw(const std::string& parent,
+                   const std::string& child,
+                   double x, double y, double z);
 
       // Trajectory generation
       void generateTrajectory(double t, 
