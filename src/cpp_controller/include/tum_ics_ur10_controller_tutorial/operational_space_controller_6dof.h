@@ -6,6 +6,8 @@
 #include <ur_model/ur_model.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <std_msgs/Float32.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Path.h>
 #include <Eigen/Dense>
 #include <memory>
 #include <tf2_ros/transform_broadcaster.h>
@@ -60,7 +62,7 @@ namespace tum_ics_ur_robot_lli
       JointState q_init_;
       JointState q_home_;
       JointState q_park_;
-      
+
       // ROS communication
       ros::NodeHandle nh_;
       ros::Publisher control_data_pub_;
@@ -68,7 +70,9 @@ namespace tum_ics_ur_robot_lli
       ros::Publisher lyapunov_pub_;
       ros::Publisher steady_state_error_pub_;
       ros::Publisher cartesian_pub_;
-      ros::Publisher tf_pub_; 
+      ros::Publisher traj_pose_pub_;
+      ros::Publisher traj_path_pub_;
+
       // Gain matrices (3x3 for Cartesian control)
       Matrix3d Kp_PD_;
       Matrix3d Kd_PD_;
@@ -118,6 +122,10 @@ namespace tum_ics_ur_robot_lli
 
       // Error accumulators
       Vector3d integral_error_acc_;
+
+      // Trajectory visualization (RViz)
+      nav_msgs::Path traj_path_msg_;
+      std::size_t traj_max_points_;
 
       // UR10 DH parameters (stored internally for self-contained kinematics)
       // Standard UR10 parameters
