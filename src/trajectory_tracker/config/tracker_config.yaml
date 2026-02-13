@@ -37,14 +37,14 @@ marker_detector_node:
   marker_size: 0.05  # 5cm
 
   # --- Color Detection Settings ---
-  # HSV color range for BLUE pen detection
-  # Range 1: 100-130 (blue)
-  color_lower1: [100, 100, 100]
-  color_upper1: [130, 255, 255]
+  # HSV color range for SKY BLUE detection
+  # Range 1: 85-110 (sky blue / cyan)
+  color_lower1: [85, 50, 100]
+  color_upper1: [110, 255, 255]
 
-  # Range 2: Same as range 1 for blue (no wrap-around like red)
-  color_lower2: [100, 100, 100]
-  color_upper2: [130, 255, 255]
+  # Range 2: Same as range 1 for sky blue (no wrap-around)
+  color_lower2: [85, 50, 100]
+  color_upper2: [110, 255, 255]
 
   # For BLUE pen, use:
   # color_lower1: [100, 100, 100]
