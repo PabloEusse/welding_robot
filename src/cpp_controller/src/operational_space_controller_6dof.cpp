@@ -621,21 +621,31 @@ namespace tum_ics_ur_robot_lli
       Eigen::MatrixXd J_pinv = pseudoInverse(J_ee);
 
       Eigen::Matrix<double,6,6> Jdot_ee_w  = computeJacobianDotTranslational(state.q, state.qp);
-      Eigen::Matrix<double, 3, 6> Jdot_ee_w_translation = Jdot_ee_w.block<3, 6>(0, 0); // Get translational part of Jacobian derivative in world frame
+      Eigen::Matrix<double, 3, 3> Jdot_ee_w_translation = Jdot_ee_w.block<3, 3>(0, 0); // Get translational part of Jacobian derivative in world frame
       //PD controller seems to be correctly
+      Eigen::Matrix<double, 6, 6> selectionMatrix = Matrix6d::Zero();
+      selectionMatrix << 1, 0, 0, 0, 0, 0,
+                          0, 1, 0, 0, 0, 0,
+                          0, 0, 1, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0;
       if (controller_type_ == ControllerType::PD)
       {
-        // Reference Cartesian velocityKreg_PD_cart_
-        Vector3d xrdot = xdot_des - Kp_PD_ * delta_x;
-        Vector3d xrddot = xddot_des - delta_xdot;//Kp_PD_ * delta_xdot;
-        // Map to joint space
-        Vector3d qrdot = J_pinv * xrdot.head(3);
-        //Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
+      Vector6d qrdot, qrddot;
+      qrdot.setZero();
+      qrddot.setZero();
+      // Reference Cartesian velocityKreg_PD_cart_
+      Vector3d xrdot = xdot_des - Kp_PD_ * delta_x;
+      Vector3d xrddot = xddot_des - delta_xdot;//Kp_PD_ * delta_xdot;
+      // Map to joint space
+      qrdot.head(3) = J_pinv * xrdot;
+      qrddot.head(3) = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot.head(3)); // Jdot_ee is the time derivative of the Jacobian 
 
-        // Sliding variable in joint space
-        Vector3d S_q = state.qp.head(3) - qrdot;
-        
-        std_msgs::Float32MultiArray delta_msg;
+      // Sliding variable in joint space
+      Vector3d S_q = state.qp.head(3) - qrdot.head(3);
+      
+      std_msgs::Float32MultiArray delta_msg;
       delta_msg.data = {static_cast<float>(xrdot(0)), 
                         static_cast<float>(xrdot(1)), 
                         static_cast<float>(xrdot(2))};
@@ -652,8 +662,9 @@ namespace tum_ics_ur_robot_lli
         //Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
         // Simple PD control (can be extended with adaptive control)
         tau.head(3) = -Kreg_PD_cart_ * S_q ;//+ Yr_theta;
-        tau(3) = jointControl(state.q, 100);
+        tau(3) = jointControl(state.q, 50);
         tau(4) = (M_PI/2 - state.q(4)) * 10;
+        tau += selectionMatrix * computeReferenceTorques(state.q, state.qp, qrdot, qrddot); // Add feedforward term based on desired trajectory
       }
       else if (controller_type_ == ControllerType::PID)
       {
@@ -838,7 +849,7 @@ namespace tum_ics_ur_robot_lli
       return Yr_theta;
     }
 
-    Vector6d OperationalSpaceController6DOF::computeReferenceTorques(Vector6d &q, Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr)
+    Vector6d OperationalSpaceController6DOF::computeReferenceTorques(const Vector6d &q, const Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr)
     {
       return model_.inertiaMatrix(q) * qddotr + model_.centripetalMatrix(q, qdot) * qdotr + model_.gravityVector(q);
     }

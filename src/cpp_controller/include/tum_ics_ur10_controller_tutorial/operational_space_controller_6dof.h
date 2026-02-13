@@ -201,7 +201,7 @@ namespace tum_ics_ur_robot_lli
       Eigen::Matrix<double, 6, 6> computeJacobian(const Vector6d& q);
       Eigen::Matrix<double, 6, 6> computeJacobianDotTranslational(const Vector6d& q, const Vector6d& qp);
       Vector6d computeYr_theta(const Vector6d& q, const Vector6d& qdot, const Vector6d& qrdot, const Vector6d& qrddot);
-      Vector6d computeReferenceTorques(Vector6d &q, Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr);
+      Vector6d computeReferenceTorques(const Vector6d &q, const Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr);
       Vector3d getEndEffectorPosition(const Vector6d& q);
       Vector3d getEndEffectorVelocity(const Vector6d& q, const Vector6d& qp);
     };
