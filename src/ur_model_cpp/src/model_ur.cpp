@@ -98,6 +98,19 @@ namespace ur
     return T;
   }
 
+  cc::HomogeneousTransformation URModel::T_5_w_inv(const cc::JointPosition &q) const
+  {
+    cc::HomogeneousTransformation T_0_w;
+    T_0_w.matrix() << -1., 0., 0., 0.,
+            0., -1., 0., 0.,
+            0., 0., 1., 0.,
+            0., 0., 0., 1.;
+    //get T_ef_0 from model
+    cc::HomogeneousTransformation T;
+    matrix_T5_0(T, q);
+    return T_0_w * T.inverse();
+  }
+
   cc::HomogeneousTransformation URModel::T_ef_B(const cc::JointPosition &q) const
   {
     cc::HomogeneousTransformation T;

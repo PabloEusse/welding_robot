@@ -11,7 +11,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <tf2_msgs/TFMessage.h>
-
+#include <nav_msgs/Path.h>
 namespace tum_ics_ur_robot_lli
 {
   namespace RobotControllers
@@ -68,7 +68,6 @@ namespace tum_ics_ur_robot_lli
       ros::Publisher lyapunov_pub_;
       ros::Publisher steady_state_error_pub_;
       ros::Publisher cartesian_pub_;
-      ros::Publisher tf_pub_;
       ros::Publisher traj_pose_pub_;
       ros::Publisher traj_path_pub_;
       ros::Publisher tf_pub_;
@@ -77,7 +76,7 @@ namespace tum_ics_ur_robot_lli
       Matrix3d Kp_PD_;
       Matrix3d Kd_PD_;
       Matrix6d Kreg_PD_;  // 6x6 for joint space regularization
-      Matrix6d Kreg_PD_cart_;
+      Matrix3d Kreg_PD_cart_;
 
       Matrix3d Kp_PID_;
       Matrix3d Kd_PID_;
@@ -171,6 +170,8 @@ namespace tum_ics_ur_robot_lli
                    double x, double y, double z);
 
       // Trajectory generation
+
+      double jointControl(const Vector6d &q, double gain);
       void generateTrajectory(double t, 
                               Vector6d& q_des, Vector6d& qdot_des, Vector6d& qddot_des,
                               Vector3d& x_des, Vector3d& xdot_des, Vector3d& xddot_des);

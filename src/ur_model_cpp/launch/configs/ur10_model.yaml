@@ -27,7 +27,7 @@ ur10_model:
   # gravity wrt world frame
   gx: 0.0
   gy: 0.0
-  gz: -9.81   # gravity is flipped!
+  gz: 9.81   # gravity is flipped!
 
   # link length
   L1: 0.128

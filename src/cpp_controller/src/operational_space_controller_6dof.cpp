@@ -5,7 +5,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <tf2_msgs/TFMessage.h>
-
+#include <nav_msgs/Path.h>
 namespace tum_ics_ur_robot_lli
 {
   namespace RobotControllers
@@ -28,17 +28,19 @@ namespace tum_ics_ur_robot_lli
       d6_ = 0.0922;   // Link offset d6
       // Initialize gain matrices
       Kp_PD_ = 5.0 * Matrix3d::Identity();
-      Kp_PD_ << 5.0, 0.0, 0.0,
-                0.0, 5.0, 0.0,
-                0.0, 0.0, 500.0;
+      Kp_PD_ << 2.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 10.0;
       Kd_PD_ = 2.0 * Matrix3d::Identity();
       Kreg_PD_ = Matrix6d::Zero();
       Kreg_PD_.block<3, 3>(0, 0) = 40.0 * Matrix3d::Identity();
       Kreg_PD_.block<3, 3>(3, 3) = 5.0 * Matrix3d::Identity();
 
-      Kreg_PD_cart_ = Matrix6d::Zero();
-      Kreg_PD_cart_.block<3, 3>(0, 0) = 10.0 * Matrix3d::Identity();
-      Kreg_PD_cart_.block<3, 3>(3, 3) = 5.0 * Matrix3d::Identity();
+      Kreg_PD_cart_ = Matrix3d::Zero();
+      Kreg_PD_cart_.block<3, 3>(0, 0) << 100, 0.0, 0.0,
+                                        0.0, 100, 0.0,
+                                        0.0, 0.0, 100;
+      // Kreg_PD_cart_.block<3, 3>(3, 3) = 5.0 * Matrix3d::Identity();
       Kp_PID_ = 5.0 * Matrix3d::Identity();
       Kd_PID_ = 5.0 * Matrix3d::Identity();
       Ki_PID_ = 5.0 * Matrix3d::Identity();
@@ -51,13 +53,13 @@ namespace tum_ics_ur_robot_lli
 
       // Initialize time parameters (matching Python)
       t_INIT_ = 20.0;    // Was 5.0, Python uses 10.0
-      t_LINEAR_ = 30.0;
+      t_LINEAR_ = 20.0;
       t_TRACK_SLOW_ = 100.0;
       t_TRACK_FAST_ = 100.0;  // Match Python's 40s
-      q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0.0, 0.0; // Starting pose for trajectory
+      q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0; // Starting pose for trajectory
       // Initialize poses
-      start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0.0, 0.0, 0.0;
-      non_singular_pose_ << 0.0, -M_PI / 2.0, -M_PI / 2.0, 0.0, 0.0, 0.0;  // Match Python
+      start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0, 0.0, 0.0;
+      non_singular_pose_ << 0.0, -M_PI / 2.0, -M_PI / 4.0, -1.9, 0, 0.0;  // Match Python
       // test good starting pose for following linear motion: 0, -90, -90, -90, 90, 0;
       //non_singular_pose_ << 0, -M_PI/2, -M_PI/2, -M_PI/2, M_PI/2, 0;
       
@@ -355,16 +357,16 @@ namespace tum_ics_ur_robot_lli
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        //last_X_ = X_;
+        last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ && current_state_ == State::INIT)
       {
         new_state = State::LINEAR;
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = t_elapsed + t0_;
-        //last_t_ = ros::Time::now().toSec();
+        last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        //last_X_ = X_;
+        last_X_ = X_;
       }
 
       // If state changed, update transition variables
@@ -444,7 +446,7 @@ namespace tum_ics_ur_robot_lli
                                << " t=" << t << " last_t_=" << last_t_ << " offset=" << offset
                                << " last_X_=" << last_X_.transpose()
                                << " track_pos=" << track_pos_cartesian.transpose()
-                              << "time offset" << track_pos_cartesian.transpose());
+                              << "time offset" << offset);
 
       switch (current_state_)
       {
@@ -456,7 +458,7 @@ namespace tum_ics_ur_robot_lli
       case State::LINEAR:
       {
         // Linear interpolation in Cartesian space to tracking start position
-        x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;\
+        x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
 
         // NOTE: adding xdot_des here didnt change anything?
         // xdot_des = (track_pos_cartesian - last_X_) / t_LINEAR_;
@@ -479,10 +481,10 @@ namespace tum_ics_ur_robot_lli
         x_des(2) = orbital_center_(2);
 
         // totally removing x_dot_des makes no difference, robot still occilates in z direction
-        // xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
-        // xdot_des(1) = circle_radius_ * omega * std::cos(theta);
-        // //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
-        // xdot_des(2) = 0; 
+        xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
+        xdot_des(1) = circle_radius_ * omega * std::cos(theta);
+        //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
+        xdot_des(2) = 0;
         break;
       }
 
@@ -517,6 +519,11 @@ namespace tum_ics_ur_robot_lli
                                                                    double dt)
     {
 
+      std_msgs::Float32MultiArray x_des_msg;
+      x_des_msg.data = {static_cast<float>(q_des(0)), 
+                        static_cast<float>(q_des(1)), 
+                        static_cast<float>(q_des(2))};
+      joint_states_des_pub_.publish(x_des_msg);
       Vector6d tau;
       tau.setZero();
       Eigen::Matrix<double, 6, 6> Kp = (10 * Eigen::Matrix<double, 6, 6>::Identity());
@@ -594,11 +601,7 @@ namespace tum_ics_ur_robot_lli
         admittance_pub_.publish(adm_msg);
       }
       
-      std_msgs::Float32MultiArray x_des_msg;
-      x_des_msg.data = {static_cast<float>(x_des(0)), 
-                        static_cast<float>(x_des(1)), 
-                        static_cast<float>(x_des(2))};
-      joint_states_des_pub_.publish(x_des_msg);
+      
 
       // Cartesian errors (use modified desired if admittance is enabled)
       Vector3d delta_x = x_current - x_des_modified;
@@ -611,7 +614,7 @@ namespace tum_ics_ur_robot_lli
       // Get full Jacobian and extract translational part (rows 0-2)
       Eigen::Matrix<double, 6, 6> J_full = computeJacobian(state.q);
       // NOTE: Robot gets unstable, if we use (3,0) -> hence (3,0) is the rotational part and (0,0) is the translational part of the Jacobian
-      Eigen::Matrix<double, 3, 6> J_ee = J_full.block<3, 6>(0, 0);  // Translational Jacobian
+      Eigen::Matrix<double, 3, 3> J_ee = J_full.block<3, 3>(0, 0);  // Translational Jacobian
 
       // Compute pseudoinverse of Jacobian
       Eigen::MatrixXd J_pinv = pseudoInverse(J_ee);
@@ -621,38 +624,39 @@ namespace tum_ics_ur_robot_lli
       //PD controller seems to be correctly
       if (controller_type_ == ControllerType::PD)
       {
-        // Reference Cartesian velocity
+        // Reference Cartesian velocityKreg_PD_cart_
         Vector3d xrdot = xdot_des - Kp_PD_ * delta_x;
         Vector3d xrddot = xddot_des - Kp_PD_ * delta_xdot;
         // Map to joint space
-        Vector6d qrdot = J_pinv * xrdot;
-        Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
+        Vector3d qrdot = J_pinv * xrdot.head(3);
+        //Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
 
         // Sliding variable in joint space
-        Vector6d S_q = state.qp - qrdot;
+        Vector3d S_q = state.qp.head(3) - qrdot;
 
         //TODO: implement missing parts aka ro, computeRegressor and
         //Vector6d Yr = computeRegressor(state.q, state.qp, qrdot, xddot_des); // Compute regressor based on current state and desired acceleration
         //Vector6d theta -= (ro * (Yr.transpose() * S_q)) * dt; // Update adaptive parameters using gradient descent
-        Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
+        //Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
         // Simple PD control (can be extended with adaptive control)
-        tau = -Kreg_PD_ * S_q ;//+ Yr_theta;
+        tau.head(3) = -Kreg_PD_cart_ * S_q ;//+ Yr_theta;
+        tau(3) = jointControl(state.q, 50);
       }
       else if (controller_type_ == ControllerType::PID)
       {
         
-        //TODO: implement correct version of PID Controller 
-        // PID in Cartesian space
-        Vector3d xrdot = xdot_des - Kp_PID_ * delta_x - Ki_PID_ * integral_error_acc_;
-        Vector3d xrddot = xddot_des - Kp_PID_ * delta_xdot - Ki_PID_ * delta_x;
-        Vector6d qrdot = J_pinv * xrdot;
-        // TODO: implement Jdot_ee helper function that calculates the time derivative of the Jacobian based on current q and qp
-        Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
-        Vector6d S_q = state.qp - qrdot;
-        //TODO: add helper function that calculate M, C, G and maybe also regressor Y from model.zip files
-        //Yr_theta = M * qrddot + C * qrdot + G; // Regressor-based adaptive control law (simplified)
-        Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot);
-        tau = -Kd_PID_(0, 0) * S_q + Yr_theta;  // Use scalar Kd for simplicity
+        // //TODO: implement correct version of PID Controller 
+        // // PID in Cartesian space
+        // Vector3d xrdot = xdot_des - Kp_PID_ * delta_x - Ki_PID_ * integral_error_acc_;
+        // Vector3d xrddot = xddot_des - Kp_PID_ * delta_xdot - Ki_PID_ * delta_x;
+        // Vector6d qrdot = J_pinv * xrdot;
+        // // TODO: implement Jdot_ee helper function that calculates the time derivative of the Jacobian based on current q and qp
+        // Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
+        // Vector6d S_q = state.qp - qrdot;
+        // //TODO: add helper function that calculate M, C, G and maybe also regressor Y from model.zip files
+        // //Yr_theta = M * qrddot + C * qrdot + G; // Regressor-based adaptive control law (simplified)
+        // Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot);
+        // tau = -Kd_PID_(0, 0) * S_q + Yr_theta;  // Use scalar Kd for simplicity
       }
 
       // Publish Cartesian tracking data
@@ -663,10 +667,10 @@ namespace tum_ics_ur_robot_lli
       steady_state_error_pub_.publish(delta_msg);
 
       //std_msgs::Float32MultiArray x_des_msg;
-      x_des_msg.data = {static_cast<float>(x_des(0)),
-                        static_cast<float>(x_des(1)),
-                        static_cast<float>(x_des(2))};
-      joint_states_des_pub_.publish(x_des_msg);
+      // x_des_msg.data = {static_cast<float>(x_des(0)),
+      //                   static_cast<float>(x_des(1)),
+      //                   static_cast<float>(x_des(2))};
+      // joint_states_des_pub_.publish(x_des_msg);
 
       std_msgs::Float32MultiArray x_msg;
       x_msg.data = {static_cast<float>(xdot_current(0)), 
@@ -832,6 +836,18 @@ namespace tum_ics_ur_robot_lli
       return Yr_theta;
     }
 
+    double OperationalSpaceController6DOF::jointControl(const Vector6d &q, double gain) 
+    {
+      Vector3d z;
+      Vector3d x;
+      z.setZero();
+      x.setZero();
+      x << 1, 0, 0;
+      z << 0, 0, 1;
+      double dot = z.transpose() * model_.T_5_w_inv(q).matrix().block<3, 3>(0, 0) * x;
+      return dot * gain;
+    }
+    
     // verification function for jacobian cal
     /*python version:
       # =========================================================
