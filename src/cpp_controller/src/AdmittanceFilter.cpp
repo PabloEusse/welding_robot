@@ -14,6 +14,7 @@ AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_to
   F_desired_.setZero();
   x_.setZero();
   x_dot_.setZero();
+  x_ddot_.setZero();
 
   // Default admittance parameters (tuned for end effector drawing)
   // Z-axis: compliant for force control
@@ -94,6 +95,7 @@ void AdmittanceFilter::reset()
 {
   x_.setZero();
   x_dot_.setZero();
+  x_ddot_.setZero();
   ROS_INFO("AdmittanceFilter: State reset");
 }
 
@@ -110,6 +112,11 @@ Vector3d AdmittanceFilter::update(double dt)
   {
     std::lock_guard<std::mutex> lock(ft_mutex_);
     F_ext = F_ext_;
+    // set F_ext to some test value if sensor is not connected for testing without hardware
+    if (!sensor_connected_)
+    {
+      F_ext << 0.0, 0.0, -5.0; // Simulate constant 5N downward force for testing
+    }
   }
 
   // Check sensor timeout (1 second)
@@ -173,6 +180,9 @@ Vector3d AdmittanceFilter::update(double dt)
       }
     }
   }
+
+  // Store acceleration for external access
+  x_ddot_ = x_ddot;
 
   // ========================================================================
   // NUMERICAL INTEGRATION (Forward Euler)
@@ -259,5 +269,14 @@ Vector3d AdmittanceFilter::getExternalForce() const
   std::lock_guard<std::mutex> lock(ft_mutex_);
   return F_ext_;
 }
+// Vector3d AdmittanceFilter::getVelocityOffset() const
+// {
+//   return x_dot_;
+// }
+Vector3d AdmittanceFilter::getAccelerationOffset() const
+{
+  return x_ddot_;
+}
+
 
 } // namespace tum_ics_ur_robot_lli

@@ -91,7 +91,7 @@ namespace tum_ics_ur_robot_lli
       tf_pub_ = nh_.advertise<tf2_msgs::TFMessage>("/tf", 100);
       // Initialize admittance filter
       admittance_filter_ = std::make_unique<AdmittanceFilter>(nh_, "/schunk_netbox/raw");
-      use_admittance_ = false;  // Disabled by default, enable via parameter
+      use_admittance_ = true;  // Disabled by default, enable via parameter
 
     }
 
@@ -577,12 +577,14 @@ namespace tum_ics_ur_robot_lli
       // ======================================================================
       Vector3d x_des_modified = x_des;
       Vector3d xdot_des_modified = xdot_des;
+      Vector3d xddot_des_modified = xddot_des;
 
       if (use_admittance_ && admittance_filter_)
       {
         // Get admittance offset: x_a from M*x_ddot + D*x_dot + K*x = F_ext - F_des
         Vector3d x_offset = admittance_filter_->update(dt);
         Vector3d xdot_offset = admittance_filter_->getVelocityOffset();
+        Vector3d xddot_offset = admittance_filter_->getAccelerationOffset();
 
         // Modify desired trajectory with admittance offset
         x_des_modified = x_des + x_offset;
@@ -600,10 +602,16 @@ namespace tum_ics_ur_robot_lli
           static_cast<float>(F_ext(2))
         };
         admittance_pub_.publish(adm_msg);
+        
       }
       
       
-
+      ROS_INFO_STREAM_THROTTLE(0.5,  "[CART CTRL] x_des=" << x_des.transpose()
+                                  << " xdot_des=" << xdot_des.transpose()
+                                  <<  " x_des_modified=" << x_des_modified.transpose() 
+                                  << " xdot_des_modified=" << xdot_des_modified.transpose() 
+                                  << " x_current=" << x_current.transpose() 
+                                  << " xdot_current=" << xdot_current.transpose());
       // Cartesian errors (use modified desired if admittance is enabled)
       Vector3d delta_x = x_current - x_des_modified;
       // ROS_WARN_STREAM("delta_x: " << delta_x.transpose());
@@ -636,8 +644,8 @@ namespace tum_ics_ur_robot_lli
       qrdot.setZero();
       qrddot.setZero();
       // Reference Cartesian velocityKreg_PD_cart_
-      Vector3d xrdot = xdot_des - Kp_PD_ * delta_x;
-      Vector3d xrddot = xddot_des - delta_xdot;//Kp_PD_ * delta_xdot;
+      Vector3d xrdot = xdot_des_modified - Kp_PD_ * delta_x;
+      Vector3d xrddot = xddot_des_modified - delta_xdot;//Kp_PD_ * delta_xdot;
       // Map to joint space
       qrdot.head(3) = J_pinv * xrdot;
       qrddot.head(3) = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot.head(3)); // Jdot_ee is the time derivative of the Jacobian 
