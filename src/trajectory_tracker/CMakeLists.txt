@@ -50,10 +50,9 @@ include_directories(
 # Install Python scripts
 catkin_install_python(PROGRAMS
   scripts/camera_node.py
-  scripts/marker_detector_node.py
-  scripts/coordinate_transformer_node.py
   scripts/trajectory_publisher_node.py
   scripts/line_extractor_node.py
+  scripts/workspace_detector.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
