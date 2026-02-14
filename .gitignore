@@ -1,0 +1,32 @@
+# Build directories
+build/
+devel/
+logs/
+install/
+
+# Catkin tools
+.catkin_tools/
+.catkin_workspace
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+.eggs/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ROS generated
+*.bag
+*.orig
+
