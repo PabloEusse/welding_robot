@@ -1,9 +1,10 @@
 # CalibrateWorkspace.srv
-# Calibrate workspace using two markers
+# Calibrate workspace using four corner markers
 
 # Request
-int32 marker_id_0  # First marker ID (default: 0)
-int32 marker_id_1  # Second marker ID (default: 1)
+# Marker IDs for the 4 corners
+# Order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+int32[] marker_ids
 ---
 # Response
 bool success

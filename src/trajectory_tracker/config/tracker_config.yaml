@@ -34,7 +34,8 @@ marker_detector_node:
   aruco_dict: "DICT_4X4_50"
 
   # Physical marker size in meters (for pose estimation)
-  marker_size: 0.05  # 5cm
+  # IMPORTANT: This must match the actual printed marker size!
+  marker_size: 0.10  # 10cm
 
   # --- Color Detection Settings ---
   # HSV color range for SKY BLUE detection
@@ -88,6 +89,55 @@ coordinate_transformer_node:
 
   # If using DroidCam handheld, you'll need to recalibrate frequently
   # or use ArUco markers for dynamic calibration
+
+# ==============================================================================
+# LINE EXTRACTOR SETTINGS
+# ==============================================================================
+line_extractor_node:
+  # Color detection for line extraction (HSV ranges)
+  # For BLUE line:
+  color_lower1: [100, 100, 100]
+  color_upper1: [130, 255, 255]
+  color_lower2: [100, 100, 100]
+  color_upper2: [130, 255, 255]
+
+  # For RED line (wraps around 0/180):
+  # color_lower1: [0, 100, 100]
+  # color_upper1: [10, 255, 255]
+  # color_lower2: [160, 100, 100]
+  # color_upper2: [180, 255, 255]
+
+  # Minimum line length in pixels to be considered valid
+  min_line_length: 50
+
+  # Distance between sampled points along the line (pixels)
+  sampling_distance: 5
+
+  # --- SMOOTHING SETTINGS ---
+  # Enable/disable smoothing of extracted line
+  enable_smoothing: true
+
+  # Smoothing method:
+  #   "bspline"  - B-spline interpolation (smoothest, good for curved lines)
+  #   "savgol"   - Savitzky-Golay filter (preserves features, less smoothing)
+  #   "gaussian" - Gaussian smoothing (simple averaging)
+  smoothing_method: "bspline"
+
+  # B-spline smoothing factor (higher = more smoothing)
+  # Typical range: 0-100
+  bspline_smoothing: 5.0
+
+  # Savitzky-Golay filter window length (must be odd)
+  # Larger window = more smoothing
+  savgol_window: 11
+
+  # Savitzky-Golay polynomial order (1-5)
+  # Higher order preserves more detail
+  savgol_order: 3
+
+  # Gaussian kernel size (must be odd)
+  # Larger kernel = more smoothing
+  gaussian_kernel: 5
 
 # ==============================================================================
 # TRAJECTORY PUBLISHER SETTINGS

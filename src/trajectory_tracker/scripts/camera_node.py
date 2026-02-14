@@ -49,6 +49,9 @@ class CameraNode:
         self.calibration_file = rospy.get_param('~calibration_file', '')
         self.jpeg_quality = rospy.get_param('~jpeg_quality', 90)
 
+        # Shutdown flag
+        self.is_shutdown = False
+
         # CV Bridge
         self.bridge = CvBridge()
 
@@ -85,6 +88,18 @@ class CameraNode:
 
         # JPEG encoding parameters
         self.encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+
+        # Create GUI window if enabled (with larger size)
+        if self.show_gui:
+            cv2.namedWindow("Camera Preview", cv2.WINDOW_NORMAL)
+            # Set window size (1280x720 or 1.5x camera resolution)
+            window_width = max(1280, int(self.actual_width * 1.5))
+            window_height = max(720, int(self.actual_height * 1.5))
+            cv2.resizeWindow("Camera Preview", window_width, window_height)
+            rospy.loginfo(f"Camera preview window: {window_width}x{window_height}")
+
+        # Register shutdown hook
+        rospy.on_shutdown(self.shutdown)
 
         # Timer for capture loop
         self.timer = rospy.Timer(rospy.Duration(1.0 / self.fps), self.capture_callback)
@@ -154,6 +169,9 @@ class CameraNode:
 
     def capture_callback(self, event):
         """Timer callback: capture frame and publish."""
+        if self.is_shutdown:
+            return
+
         ret, frame = self.cap.read()
         if not ret:
             rospy.logwarn_throttle(1.0, "Failed to capture frame")
@@ -162,7 +180,7 @@ class CameraNode:
         timestamp = rospy.Time.now()
 
         # Show preview if enabled
-        if self.show_gui:
+        if self.show_gui and not self.is_shutdown:
             cv2.imshow("Camera Preview", frame)
             cv2.waitKey(1)
 
@@ -196,13 +214,25 @@ class CameraNode:
     def shutdown(self):
         """Clean up resources."""
         rospy.loginfo("Shutting down camera node...")
-        if self.cap is not None:
+        self.is_shutdown = True
+
+        # Stop timer
+        if hasattr(self, 'timer'):
+            self.timer.shutdown()
+
+        # Release camera
+        if hasattr(self, 'cap') and self.cap is not None:
             self.cap.release()
+
+        # Destroy all OpenCV windows
         cv2.destroyAllWindows()
+
+        # Wait a bit to ensure windows are closed
+        cv2.waitKey(1)
+        rospy.loginfo("Camera node shutdown complete")
 
 
 def main():
-    node = None
     try:
         node = CameraNode()
         rospy.spin()
@@ -210,9 +240,7 @@ def main():
         pass
     except Exception as e:
         rospy.logfatal(f"Camera node error: {e}")
-    finally:
-        if node is not None:
-            node.shutdown()
+        raise
 
 
 if __name__ == '__main__':

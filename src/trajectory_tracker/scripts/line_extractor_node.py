@@ -9,8 +9,9 @@ This node:
 1. Captures current camera image
 2. Detects colored lines using HSV filtering
 3. Extracts line skeleton and orders points
-4. Transforms points to robot frame using workspace calibration
-5. Publishes as Path for visualization and recording
+4. Applies smoothing to reduce pixel-level jitter
+5. Transforms points to robot frame using workspace calibration
+6. Publishes as Path for visualization and recording
 
 Services:
     /trajectory_tracker/extract_line (ExtractLine): Extract line from current image
@@ -24,19 +25,32 @@ import rospy
 import cv2
 import numpy as np
 from threading import Lock
+from scipy import interpolate
+from scipy.signal import savgol_filter
 
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
+from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 
 from trajectory_tracker.msg import TrajectoryTarget, WorkspaceCalibration
 from trajectory_tracker.srv import ExtractLine, ExtractLineResponse
 
+# OpenCV version compatibility
+CV_VERSION = cv2.__version__.split('.')
+CV_MAJOR = int(CV_VERSION[0])
+CV_MINOR = int(CV_VERSION[1]) if len(CV_VERSION) > 1 else 0
+
+rospy.loginfo(f"OpenCV version: {cv2.__version__}")
+
 
 class LineExtractorNode:
     def __init__(self):
         rospy.init_node('line_extractor_node')
+
+        # Shutdown flag
+        self.is_shutdown = False
 
         # Parameters
         self.color_lower1 = np.array(rospy.get_param('~color_lower1', [100, 100, 100]))
@@ -45,6 +59,14 @@ class LineExtractorNode:
         self.color_upper2 = np.array(rospy.get_param('~color_upper2', [130, 255, 255]))
         self.min_line_length = rospy.get_param('~min_line_length', 50)  # pixels
         self.sampling_distance = rospy.get_param('~sampling_distance', 5)  # pixels between points
+
+        # Smoothing parameters
+        self.enable_smoothing = rospy.get_param('~enable_smoothing', True)
+        self.smoothing_method = rospy.get_param('~smoothing_method', 'bspline')  # 'bspline', 'savgol', 'gaussian'
+        self.bspline_smoothing = rospy.get_param('~bspline_smoothing', 5.0)  # smoothing factor for B-spline
+        self.savgol_window = rospy.get_param('~savgol_window', 11)  # window length for Savitzky-Golay
+        self.savgol_order = rospy.get_param('~savgol_order', 3)  # polynomial order for Savitzky-Golay
+        self.gaussian_kernel = rospy.get_param('~gaussian_kernel', 5)  # kernel size for Gaussian smoothing
 
         # CV Bridge
         self.bridge = CvBridge()
@@ -67,6 +89,10 @@ class LineExtractorNode:
             '/trajectory_tracker/extracted_path', Path, queue_size=1)
         self.debug_pub = rospy.Publisher(
             '/trajectory_tracker/extraction_debug', Image, queue_size=1)
+        self.contour_marker_pub = rospy.Publisher(
+            '/trajectory_tracker/line_contour_markers', MarkerArray, queue_size=1)
+        self.skeleton_marker_pub = rospy.Publisher(
+            '/trajectory_tracker/line_skeleton_markers', MarkerArray, queue_size=1)
 
         # Subscribers
         self.image_sub = rospy.Subscriber(
@@ -80,8 +106,17 @@ class LineExtractorNode:
         self.extract_srv = rospy.Service(
             '/trajectory_tracker/extract_line', ExtractLine, self.extract_line_service)
 
+        # Register shutdown hook
+        rospy.on_shutdown(self.shutdown)
+
         rospy.loginfo("Line Extractor Node started")
         rospy.loginfo("Call /trajectory_tracker/extract_line to extract drawn line")
+
+    def shutdown(self):
+        """Clean up resources on shutdown."""
+        rospy.loginfo("Shutting down line extractor node...")
+        self.is_shutdown = True
+        rospy.loginfo("Line extractor node shutdown complete")
 
     def _pose_to_matrix(self, pose):
         """Convert [x, y, z, roll, pitch, yaw] to 4x4 transformation matrix."""
@@ -138,7 +173,7 @@ class LineExtractorNode:
         rospy.loginfo("=" * 60)
 
         # Extract line from image
-        line_points, debug_image = self.extract_line_from_image(image)
+        line_points, debug_image, mask = self.extract_line_from_image(image)
 
         if len(line_points) == 0:
             response.success = False
@@ -188,6 +223,9 @@ class LineExtractorNode:
 
         self.path_pub.publish(path_msg)
 
+        # Publish visualization markers for RViz
+        self._publish_visualization_markers(mask, line_points, path_points)
+
         # Publish debug image
         try:
             debug_msg = self.bridge.cv2_to_imgmsg(debug_image, encoding='bgr8')
@@ -210,7 +248,7 @@ class LineExtractorNode:
     def extract_line_from_image(self, image):
         """
         Extract line skeleton from image.
-        Returns: (list of (x,y) points, debug_image)
+        Returns: (list of (x,y) points, debug_image, mask)
         """
         debug_image = image.copy()
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -234,6 +272,10 @@ class LineExtractorNode:
         # Downsample points
         if len(points) > 0:
             points = self.downsample_points(points, self.sampling_distance)
+
+        # Apply smoothing
+        if len(points) > 0 and self.enable_smoothing:
+            points = self.smooth_points(points)
 
         # Draw on debug image
         if len(points) > 0:
@@ -261,7 +303,7 @@ class LineExtractorNode:
             cv2.putText(debug_image, "No line detected", (10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-        return points, debug_image
+        return points, debug_image, mask
 
     def skeletonize(self, mask):
         """Extract skeleton of binary mask."""
@@ -371,6 +413,95 @@ class LineExtractorNode:
 
         return downsampled
 
+    def smooth_points(self, points):
+        """
+        Smooth a list of (x, y) points to reduce pixel-level jitter.
+
+        Methods:
+        - 'bspline': B-spline interpolation (smooth curves)
+        - 'savgol': Savitzky-Golay filter (preserves features)
+        - 'gaussian': Gaussian smoothing (simple averaging)
+
+        Args:
+            points: List of (x, y) tuples
+
+        Returns:
+            List of smoothed (x, y) tuples
+        """
+        if len(points) < 4:
+            return points  # Not enough points to smooth
+
+        points_array = np.array(points)
+        x = points_array[:, 0]
+        y = points_array[:, 1]
+
+        try:
+            if self.smoothing_method == 'bspline':
+                # B-spline interpolation for smooth curves
+                num_points = len(points)
+
+                # Parameterize by cumulative chord length
+                t = np.zeros(num_points)
+                for i in range(1, num_points):
+                    t[i] = t[i-1] + np.sqrt((x[i] - x[i-1])**2 + (y[i] - y[i-1])**2)
+
+                if t[-1] == 0:  # All points are the same
+                    return points
+
+                # Normalize t to [0, 1]
+                t = t / t[-1]
+
+                # Determine spline degree (k) based on number of points
+                k = min(3, num_points - 1)  # Cubic spline if possible
+
+                # Create B-spline with smoothing
+                tck_x, _ = interpolate.splprep([x], u=t, s=self.bspline_smoothing, k=k)
+                tck_y, _ = interpolate.splprep([y], u=t, s=self.bspline_smoothing, k=k)
+
+                # Evaluate spline at original parameter values
+                x_smooth = interpolate.splev(t, tck_x)[0]
+                y_smooth = interpolate.splev(t, tck_y)[0]
+
+            elif self.smoothing_method == 'savgol':
+                # Savitzky-Golay filter (preserves peak shapes)
+                window = min(self.savgol_window, len(points))
+                if window % 2 == 0:  # Must be odd
+                    window += 1
+
+                order = min(self.savgol_order, window - 1)
+
+                x_smooth = savgol_filter(x, window, order, mode='nearest')
+                y_smooth = savgol_filter(y, window, order, mode='nearest')
+
+            elif self.smoothing_method == 'gaussian':
+                # Gaussian smoothing (simple averaging)
+                kernel_size = self.gaussian_kernel
+                if kernel_size % 2 == 0:  # Must be odd
+                    kernel_size += 1
+
+                # Create Gaussian kernel
+                sigma = kernel_size / 3.0
+                kernel = cv2.getGaussianKernel(kernel_size, sigma)
+                kernel = kernel / kernel.sum()
+
+                # Apply 1D convolution
+                x_smooth = np.convolve(x, kernel.flatten(), mode='same')
+                y_smooth = np.convolve(y, kernel.flatten(), mode='same')
+
+            else:
+                rospy.logwarn(f"Unknown smoothing method: {self.smoothing_method}, using original points")
+                return points
+
+            # Convert back to list of tuples
+            smoothed_points = [(x_smooth[i], y_smooth[i]) for i in range(len(x_smooth))]
+
+            rospy.loginfo(f"Applied {self.smoothing_method} smoothing to {len(points)} points")
+            return smoothed_points
+
+        except Exception as e:
+            rospy.logwarn(f"Smoothing failed: {e}, using original points")
+            return points
+
     def pixel_to_robot(self, u, v):
         """Transform pixel coordinates to robot frame."""
         # Unproject pixel to 3D ray in camera frame
@@ -409,6 +540,138 @@ class LineExtractorNode:
         point_robot = cam_origin + t * ray_dir
 
         return point_robot
+
+    def _publish_visualization_markers(self, mask, pixel_points, robot_points):
+        """
+        Publish visualization markers for RViz.
+
+        Creates two types of markers:
+        1. Line contour (boundary of detected line) - RED
+        2. Line skeleton (centerline/trajectory) - GREEN
+
+        Args:
+            mask: Binary mask of detected line
+            pixel_points: List of (x,y) pixel coordinates of skeleton
+            robot_points: List of 3D points in robot frame
+        """
+        timestamp = rospy.Time.now()
+
+        # === 1. Contour Markers (boundary of original line) ===
+        contour_markers = MarkerArray()
+
+        # Find contours from binary mask
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for i, contour in enumerate(contours):
+            if len(contour) < 3:
+                continue
+
+            marker = Marker()
+            marker.header.frame_id = "base_link"
+            marker.header.stamp = timestamp
+            marker.ns = "line_contour"
+            marker.id = i
+            marker.type = Marker.LINE_STRIP
+            marker.action = Marker.ADD
+
+            # Red color for contour boundary
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
+            marker.color.a = 0.7
+
+            # Line width (2mm)
+            marker.scale.x = 0.002
+
+            # Transform contour pixel coordinates to robot frame
+            for point_px in contour:
+                px, py = point_px[0]
+                try:
+                    pos_robot = self.pixel_to_robot(float(px), float(py))
+                    p = Point()
+                    p.x = pos_robot[0]
+                    p.y = pos_robot[1]
+                    p.z = pos_robot[2]
+                    marker.points.append(p)
+                except:
+                    continue
+
+            if len(marker.points) > 0:
+                contour_markers.markers.append(marker)
+
+        self.contour_marker_pub.publish(contour_markers)
+
+        # === 2. Skeleton Markers (centerline/trajectory) ===
+        skeleton_markers = MarkerArray()
+
+        if len(robot_points) > 0:
+            # Create line strip for trajectory centerline
+            line_marker = Marker()
+            line_marker.header.frame_id = "base_link"
+            line_marker.header.stamp = timestamp
+            line_marker.ns = "line_skeleton"
+            line_marker.id = 0
+            line_marker.type = Marker.LINE_STRIP
+            line_marker.action = Marker.ADD
+
+            # Green color for skeleton trajectory
+            line_marker.color.r = 0.0
+            line_marker.color.g = 1.0
+            line_marker.color.b = 0.0
+            line_marker.color.a = 1.0
+
+            # Line width (5mm)
+            line_marker.scale.x = 0.005
+
+            # Add all trajectory points
+            for pos_robot in robot_points:
+                p = Point()
+                p.x = pos_robot[0]
+                p.y = pos_robot[1]
+                p.z = pos_robot[2]
+                line_marker.points.append(p)
+
+            skeleton_markers.markers.append(line_marker)
+
+            # Create sphere marker for start point (Yellow)
+            start_marker = Marker()
+            start_marker.header.frame_id = "base_link"
+            start_marker.header.stamp = timestamp
+            start_marker.ns = "line_skeleton_points"
+            start_marker.id = 1
+            start_marker.type = Marker.SPHERE
+            start_marker.action = Marker.ADD
+            start_marker.pose.position.x = robot_points[0][0]
+            start_marker.pose.position.y = robot_points[0][1]
+            start_marker.pose.position.z = robot_points[0][2]
+            start_marker.pose.orientation.w = 1.0
+            start_marker.scale.x = start_marker.scale.y = start_marker.scale.z = 0.01
+            start_marker.color.r = 1.0
+            start_marker.color.g = 1.0
+            start_marker.color.b = 0.0
+            start_marker.color.a = 1.0
+            skeleton_markers.markers.append(start_marker)
+
+            # Create sphere marker for end point (Magenta)
+            end_marker = Marker()
+            end_marker.header.frame_id = "base_link"
+            end_marker.header.stamp = timestamp
+            end_marker.ns = "line_skeleton_points"
+            end_marker.id = 2
+            end_marker.type = Marker.SPHERE
+            end_marker.action = Marker.ADD
+            end_marker.pose.position.x = robot_points[-1][0]
+            end_marker.pose.position.y = robot_points[-1][1]
+            end_marker.pose.position.z = robot_points[-1][2]
+            end_marker.pose.orientation.w = 1.0
+            end_marker.scale.x = end_marker.scale.y = end_marker.scale.z = 0.01
+            end_marker.color.r = 1.0
+            end_marker.color.g = 0.0
+            end_marker.color.b = 1.0
+            end_marker.color.a = 1.0
+            skeleton_markers.markers.append(end_marker)
+
+        self.skeleton_marker_pub.publish(skeleton_markers)
 
 
 def main():

@@ -18,12 +18,6 @@
     <arg name="fps" default="30" doc="Camera FPS"/>
     <arg name="show_gui" default="false" doc="Show debug windows"/>
 
-    <arg name="detection_mode" default="aruco" doc="aruco or color"/>
-    <arg name="transform_mode" default="fixed_plane" doc="fixed_plane, marker_pose, or homography"/>
-    <arg name="plane_z" default="0.0" doc="Drawing surface Z height in robot frame"/>
-
-    <arg name="tracking_mode" default="continuous" doc="continuous, waypoint, or trigger"/>
-
     <!-- Load configuration -->
     <rosparam file="$(find trajectory_tracker)/config/tracker_config.yaml" command="load"/>
 
@@ -40,31 +34,17 @@
     </node>
 
     <!-- ============================================================
-         Marker Detector Node
+         Workspace Detector Node (Marker Detection + Coordinate Transform)
          ============================================================ -->
-    <node name="marker_detector_node" pkg="trajectory_tracker" type="marker_detector_node.py" output="screen">
-        <param name="detection_mode" value="$(arg detection_mode)"/>
+    <node name="workspace_detector_node" pkg="trajectory_tracker" type="workspace_detector.py" output="screen">
         <param name="show_debug" value="true"/>
-        <!-- ArUco settings loaded from YAML -->
-        <!-- Color detection settings loaded from YAML -->
-    </node>
-
-    <!-- ============================================================
-         Coordinate Transformer Node
-         ============================================================ -->
-    <node name="coordinate_transformer_node" pkg="trajectory_tracker" type="coordinate_transformer_node.py" output="screen">
-        <param name="transform_mode" value="$(arg transform_mode)"/>
-        <param name="plane_z" value="$(arg plane_z)"/>
-        <!-- Camera-to-robot transform loaded from YAML -->
+        <!-- ArUco and coordinate transform settings loaded from YAML -->
     </node>
 
     <!-- ============================================================
          Trajectory Publisher Node
          ============================================================ -->
-    <node name="trajectory_publisher_node" pkg="trajectory_tracker" type="trajectory_publisher_node.py" output="screen">
-        <param name="mode" value="$(arg tracking_mode)"/>
-        <!-- Other settings loaded from YAML -->
-    </node>
+    <node name="trajectory_publisher_node" pkg="trajectory_tracker" type="trajectory_publisher_node.py" output="screen"/>
 
     <!-- ============================================================
          Line Extractor Node
