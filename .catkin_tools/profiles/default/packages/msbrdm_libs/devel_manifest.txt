@@ -1,6 +1,0 @@
-msbrdm_libs
-/home/msbrdm_student/Desktop/welding_robot/devel/.private/msbrdm_libs/cmake.lock /home/msbrdm_student/Desktop/welding_robot/devel/./cmake.lock
-/home/msbrdm_student/Desktop/welding_robot/devel/.private/msbrdm_libs/lib/pkgconfig/msbrdm_libs.pc /home/msbrdm_student/Desktop/welding_robot/devel/lib/pkgconfig/msbrdm_libs.pc
-/home/msbrdm_student/Desktop/welding_robot/devel/.private/msbrdm_libs/lib/python3/dist-packages/msbrdm_libs/__init__.py /home/msbrdm_student/Desktop/welding_robot/devel/lib/python3/dist-packages/msbrdm_libs/__init__.py
-/home/msbrdm_student/Desktop/welding_robot/devel/.private/msbrdm_libs/share/msbrdm_libs/cmake/msbrdm_libsConfig.cmake /home/msbrdm_student/Desktop/welding_robot/devel/share/msbrdm_libs/cmake/msbrdm_libsConfig.cmake
-/home/msbrdm_student/Desktop/welding_robot/devel/.private/msbrdm_libs/share/msbrdm_libs/cmake/msbrdm_libsConfig-version.cmake /home/msbrdm_student/Desktop/welding_robot/devel/share/msbrdm_libs/cmake/msbrdm_libsConfig-version.cmake
