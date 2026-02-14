@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>weld_line_vision</name>
+  <version>0.0.0</version>
+  <description>Vision node to detect a red weld line and generate a trajectory</description>
+
+  <maintainer email="antonio.botello@tum.de">Jose Antonio Botello Vazquez</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>image_transport</depend>
+  <depend>cv_bridge</depend>
+
+</package>

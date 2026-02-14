@@ -1,0 +1,460 @@
+#include <ros/ros.h>
+#include <image_transport/image_transport.h>
+#include <cv_bridge/cv_bridge.h>
+
+#include <sensor_msgs/Image.h>
+#include <nav_msgs/Path.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <visualization_msgs/Marker.h>
+
+#include <opencv2/opencv.hpp>
+#include <opencv2/ximgproc.hpp>   
+#include <opencv2/aruco.hpp>      
+
+class TrajectoryGenerator
+{
+public:
+  explicit TrajectoryGenerator(ros::NodeHandle& nh)
+  : nh_(nh), it_(nh_)
+  {
+    // Frames
+    nh_.param<std::string>("image_topic", image_topic_, "/droidcam/image_raw");
+    // nh_.param<std::string>("frame_id", frame_id_, "paper");
+    nh_.param<std::string>("frame_id", frame_id_, "workspace_frame");
+
+    // Size of the paper representing the workspace (We used paper for test.)
+    nh_.param<double>("paper_width_m",  paper_w_m_, 0.210); // A4 width in m
+    nh_.param<double>("paper_height_m", paper_h_m_, 0.297); // A4 height in m
+
+    // Settings for the ArUco codes.
+    nh_.param<int>("aruco_dict_id", aruco_dict_id_, (int)cv::aruco::DICT_4X4_50);
+    nh_.param<double>("aruco_marker_size", aruco_marker_size_, 0.06);
+    nh_.param<double>("ws_w1_margin_offset", paper_w1_margin_offset_, 0.015);
+    nh_.param<double>("ws_h1_margin_offset", paper_h1_margin_offset_, 0.018);
+    nh_.param<double>("ws_w2_margin_offset", paper_w2_margin_offset_, 0.015);
+    nh_.param<double>("ws_h2_margin_offset", paper_h2_margin_offset_, 0.018);
+    nh_.param<double>("ws_w3_margin_offset", paper_w3_margin_offset_, 0.015);
+    nh_.param<double>("ws_h3_margin_offset", paper_h3_margin_offset_, 0.018);
+    nh_.param<double>("ws_w4_margin_offset", paper_w4_margin_offset_, 0.015);
+    nh_.param<double>("ws_h4_margin_offset", paper_h4_margin_offset_, 0.018);
+    nh_.param<int>("id_tl", id_tl_, 0);   // ID Top Left
+    nh_.param<int>("id_tr", id_tr_, 1);   // ID Top Right
+    nh_.param<int>("id_bl", id_bl_, 2);   // ID Bottom Left
+    nh_.param<int>("id_br", id_br_, 3);   // ID Bottom Right
+
+    // HSV values for the chosen color (cyan blue).
+    nh_.param<int>("h_low",  h_low_,  75);
+    nh_.param<int>("h_high", h_high_, 130);
+    nh_.param<int>("s_low",  s_low_,  20);
+    nh_.param<int>("v_low",  v_low_,  40);
+
+    // ROI is optional for the moment
+    nh_.param<int>("roi_x", roi_x_, 0);
+    nh_.param<int>("roi_y", roi_y_, 0);
+    nh_.param<int>("roi_w", roi_w_, 0);
+    nh_.param<int>("roi_h", roi_h_, 0);
+
+    // Morphology
+    nh_.param<int>("morph_ksize", morph_ksize_, 3);
+
+    // Sampling along skeleton
+    nh_.param<int>("sample_step_px", sample_step_px_, 6);
+
+    // Subscribers 
+    img_sub_  = it_.subscribe(image_topic_, 1, &TrajectoryGenerator::imgCallback, this);
+
+    // Publishers
+    path_pub_   = nh_.advertise<nav_msgs::Path>("weld_path", 1);
+    marker_pub_ = nh_.advertise<visualization_msgs::Marker>("weld_points_marker", 1);
+
+    dbg_pub_  = it_.advertise("debug_image", 1);    // Bounding box for the detected object (for debugging)
+    mask_pub_ = it_.advertise("debug_mask", 1);     // Mask or the detected object (for debugging)
+    skel_pub_ = it_.advertise("debug_skeleton", 1); // Piwel-wise path
+
+    dict_ = cv::aruco::getPredefinedDictionary((cv::aruco::PREDEFINED_DICTIONARY_NAME)aruco_dict_id_);
+    params_ = cv::aruco::DetectorParameters::create();
+
+    ROS_INFO("Trajectory Generator initialized. Subscribing to: %s", image_topic_.c_str());
+    //ROS_INFO("Paper size: %.3f x %.3f m, frame_id=%s", paper_w_m_, paper_h_m_, frame_id_.c_str());
+    ROS_INFO("ArUco ids: TL=%d TR=%d BL=%d BR=%d (dict=%d)", id_tl_, id_tr_, id_bl_, id_br_, aruco_dict_id_);
+  }
+
+private:
+  static inline bool inBounds(int x, int y, int w, int h)
+  {
+    return (x >= 0 && y >= 0 && x < w && y < h);
+  }
+
+  // This function returns the number of active neighbours for a pixel (x,y).
+  int neighborCount8(const cv::Mat& skel, int x, int y) const
+  {
+    // remember that the coordinate system in OpenCV is defined like:
+    // (0,0) --- x
+    //   |
+    //   y
+    static const int dx[8] = {-1, 0, 1,-1, 1,-1, 0, 1};
+    static const int dy[8] = {-1,-1,-1, 0, 0, 1, 1, 1};
+    int c = 0;
+    for (int k = 0; k < 8; ++k) {
+      int nx = x + dx[k], ny = y + dy[k];
+      if (inBounds(nx, ny, skel.cols, skel.rows) && skel.at<uint8_t>(ny, nx) > 0) c++;
+    //std::cout<<"Iteration: "<<k<<", nx value: "<<nx<<"ny value:"<<ny<<"skel columns"<<skel.cols<<"skel rows: "<<skel.rows<<std::endl;
+    }
+    return c;
+  }
+
+  std::vector<cv::Point> traceSkeleton(const cv::Mat& skel) const
+  {
+    std::vector<cv::Point> points;
+    std::vector<cv::Point> endpoints;
+
+    std::vector<cv::Point> on_pixels;
+    on_pixels.reserve(5000);
+
+    // Get the pixels that are part of the trayectory.
+    for (int y = 0; y < skel.rows; ++y) {
+      const uint8_t* row = skel.ptr<uint8_t>(y);
+      for (int x = 0; x < skel.cols; ++x) {
+        if (row[x] > 0) on_pixels.emplace_back(x, y);
+      }
+    }
+
+    if (on_pixels.size() < 2)
+    {
+      ROS_WARN_THROTTLE(1.0, "Only one pixel was detected. Cannot for a path.");
+      return points;
+    }
+
+    for (const auto& p : on_pixels) {
+      int n = neighborCount8(skel, p.x, p.y);
+      if (n == 1) endpoints.push_back(p);
+    }
+
+    cv::Point start = endpoints.empty() ? on_pixels.front() : endpoints.front();
+    cv::Mat visited = cv::Mat::zeros(skel.size(), CV_8U);
+
+    static const int dx[8] = {-1,  0,  1, -1, 1, -1, 0, 1};
+    static const int dy[8] = {-1, -1, -1,  0, 0,  1, 1, 1};
+
+    cv::Point cur = start;
+    cv::Point prev(-999, -999);
+
+    while (true) {
+      points.push_back(cur);
+      visited.at<uint8_t>(cur.y, cur.x) = 255;
+
+      std::vector<cv::Point> neigh;
+      neigh.reserve(8);
+      for (int k = 0; k < 8; ++k) {
+        cv::Point np(cur.x + dx[k], cur.y + dy[k]);
+        if (!inBounds(np.x, np.y, skel.cols, skel.rows)) continue;
+        if (skel.at<uint8_t>(np.y, np.x) == 0) continue;
+        if (np == prev) continue;
+        neigh.push_back(np);
+      }
+      if (neigh.empty()) break;
+
+      cv::Point next = neigh.front();
+      bool found_unvisited = false;
+      for (const auto& np : neigh) {
+        if (visited.at<uint8_t>(np.y, np.x) == 0) {
+          next = np;
+          found_unvisited = true;
+          break;
+        }
+      }
+      if (!found_unvisited) break;
+
+      prev = cur;
+      cur = next;
+
+      if ((int)points.size() > 200000) break;
+    }
+
+    return points;
+  }
+
+  static cv::Point2f markerCenter(const std::vector<cv::Point2f>& corners4)
+  {
+    cv::Point2f c(0.f, 0.f);
+    for (const auto& p : corners4) c += p;
+    c *= 0.25f;
+    return c;
+  }
+
+  std::vector<cv::Point2f> computeAuroCenters()
+  {
+    std::vector<cv::Point2f> paper_pts;
+    paper_pts.reserve(4);
+    const float marker_center = static_cast<float>(aruco_marker_size_ * 0.5);
+
+    cv::Point2f top_left_center(marker_center + paper_w1_margin_offset_, 
+                                    marker_center + paper_h1_margin_offset_); 
+    cv::Point2f top_right_center(paper_w_m_ - marker_center - paper_w2_margin_offset_, 
+                                    marker_center + paper_h2_margin_offset_); 
+    cv::Point2f bottom_left_center(marker_center + paper_w3_margin_offset_, 
+                                    paper_h_m_ - marker_center - paper_h3_margin_offset_); 
+    cv::Point2f bottom_right_center(paper_w_m_ - marker_center - paper_w4_margin_offset_, 
+                                    paper_h_m_ - marker_center - paper_h4_margin_offset_);   
+    paper_pts.emplace_back(top_left_center);  
+    paper_pts.emplace_back(top_right_center);
+    paper_pts.emplace_back(bottom_left_center);
+    paper_pts.emplace_back(bottom_right_center);          
+    return paper_pts;                                                     
+  }
+
+  bool computeHomographyFromArucoCenters(
+      const cv::Mat& bgr_full,
+      cv::Mat& H_img_to_paper,
+      cv::Mat& dbg_draw)
+  {
+    std::vector<int> ids;
+    std::vector<std::vector<cv::Point2f>> corners;
+
+    // Get Aruco markers, their ID and their corners (in pixels).
+    cv::aruco::detectMarkers(bgr_full, dict_, corners, ids, params_);
+
+    dbg_draw = bgr_full.clone();
+    if (!ids.empty()) {
+      cv::aruco::drawDetectedMarkers(dbg_draw, corners, ids);
+    }
+
+    auto findCenterById = [&](int target_id, cv::Point2f& out_center) -> bool {
+      for (size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i] == target_id) {
+          out_center = markerCenter(corners[i]);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    cv::Point2f c_tl, c_tr, c_bl, c_br;
+    bool ok =
+      findCenterById(id_tl_, c_tl) &&
+      findCenterById(id_tr_, c_tr) &&
+      findCenterById(id_bl_, c_bl) &&
+      findCenterById(id_br_, c_br);
+
+    if (!ok) {
+      ROS_WARN_THROTTLE(1.0, "Missing ArUco corners. Need ids TL=%d TR=%d BL=%d BR=%d",
+                        id_tl_, id_tr_, id_bl_, id_br_);
+      return false;
+    }
+
+    // Image points (pixels)
+    std::vector<cv::Point2f> img_pts = {c_tl, c_tr, c_bl, c_br};
+
+    std::vector<cv::Point2f> paper_pts = computeAuroCenters();
+
+    H_img_to_paper = cv::findHomography(img_pts, paper_pts, cv::RANSAC);
+    if (H_img_to_paper.empty()) {
+      ROS_WARN_THROTTLE(1.0, "Homography could not be calculated.");
+      return false;
+    }
+
+    // draw centers for visual debug
+    auto drawC = [&](const cv::Point2f& p, const std::string& txt) {
+      cv::circle(dbg_draw, p, 5, cv::Scalar(0, 255, 255), -1);
+      cv::putText(dbg_draw, txt, p + cv::Point2f(6, -6),
+                  cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
+    };
+    drawC(c_tl, "TL");
+    drawC(c_tr, "TR");
+    drawC(c_bl, "BL");
+    drawC(c_br, "BR");
+
+    return true;
+  }
+
+  void imgCallback(const sensor_msgs::ImageConstPtr& msg)
+  {
+    cv::Mat bgr_full;
+    try {
+      bgr_full = cv_bridge::toCvShare(msg, "bgr8")->image;
+    } catch (const std::exception& e) {
+      ROS_WARN("cv_bridge: %s", e.what());
+      return;
+    }
+
+    // Compute homography (pixel -> paper meters)
+    cv::Mat H;
+    cv::Mat dbg_aruco;
+    if (!computeHomographyFromArucoCenters(bgr_full, H, dbg_aruco)) {
+      // Only publish marker detecion
+      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      return;
+    }
+
+    // ROI for color processing (optional)
+    cv::Rect roi(0, 0, bgr_full.cols, bgr_full.rows);
+    if (roi_w_ > 0 && roi_h_ > 0) {
+      roi = cv::Rect(roi_x_, roi_y_, roi_w_, roi_h_) & cv::Rect(0, 0, bgr_full.cols, bgr_full.rows);
+    }
+    cv::Mat bgr = bgr_full(roi);
+
+    // BGR -> HSV
+    cv::Mat hsv;
+    cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
+
+    // Threshold cyan blue.
+    cv::Mat mask;
+    cv::inRange(hsv,
+                cv::Scalar(h_low_, s_low_, v_low_),
+                cv::Scalar(h_high_, 255, 255),
+                mask);
+
+    // Morphology
+    int k = std::max(1, morph_ksize_);  // Make sure that the kernel size is positive
+    if (k % 2 == 0) k += 1;   // Make sure that the kernel is odd
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(k, k));    // Kernel with an ellipsoid shape fits better
+    cv::morphologyEx(mask, mask, cv::MORPH_OPEN, kernel);
+    cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+
+    mask_pub_.publish(cv_bridge::CvImage(msg->header, "mono8", mask).toImageMsg());
+
+    // Skeleton
+    cv::Mat skel;
+    cv::ximgproc::thinning(mask, skel, cv::ximgproc::THINNING_ZHANGSUEN);
+    skel_pub_.publish(cv_bridge::CvImage(msg->header, "mono8", skel).toImageMsg());   // OpenCV image -> ROS image
+
+    // Trace skeleton
+    std::vector<cv::Point> ordered = traceSkeleton(skel);
+    if ((int)ordered.size() < 10) {
+      ROS_WARN_THROTTLE(1.0, "Skeleton too small to be traceable.");
+      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      return;
+    }
+
+    // Sample points (back to full image coords by adding ROI offset)
+    std::vector<cv::Point2f> sampled_px;
+    sampled_px.reserve(ordered.size() / std::max(1, sample_step_px_) + 1);
+
+    for (int i = 0; i < (int)ordered.size(); i += std::max(1, sample_step_px_)) {
+      sampled_px.emplace_back((float)(ordered[i].x + roi.x), (float)(ordered[i].y + roi.y));
+    }
+    if (sampled_px.size() < 2) return;
+
+    // Pixel to paper meters using homography
+    std::vector<cv::Point2f> sampled_xy;
+    cv::perspectiveTransform(sampled_px, sampled_xy, H);
+
+    // Publish Path in the workspace frame (paper with Z=0)
+    nav_msgs::Path path;
+    path.header.stamp = msg->header.stamp;
+    path.header.frame_id = frame_id_;
+
+    visualization_msgs::Marker mk;
+    mk.header = path.header;
+    mk.ns = "weld_points";
+    mk.id = 0;
+    mk.type = visualization_msgs::Marker::SPHERE_LIST;
+    mk.action = visualization_msgs::Marker::ADD;
+    mk.pose.orientation.w = 1.0;
+    mk.scale.x = mk.scale.y = mk.scale.z = 0.01;
+    mk.color.a = 1.0;
+    mk.color.b = 1.0;
+
+    for (size_t i = 0; i < sampled_xy.size(); ++i) {
+      const double X = sampled_xy[i].x;
+      const double Y = sampled_xy[i].y;
+
+      geometry_msgs::PoseStamped ps;
+      ps.header = path.header;
+      ps.pose.position.x = X;
+      ps.pose.position.y = Y;
+      ps.pose.position.z = 0.0;   // on paper plane
+      ps.pose.orientation.w = 1.0;
+      path.poses.push_back(ps);
+
+      geometry_msgs::Point p;
+      p.x = X; p.y = Y; p.z = 0.0;
+      mk.points.push_back(p);
+    }
+
+    path_pub_.publish(path);
+    marker_pub_.publish(mk);
+
+    // Show skeleton (green) + aruco detection
+    cv::Mat dbg = dbg_aruco.clone();
+    for (int y = 0; y < skel.rows; ++y) {
+      const uint8_t* row = skel.ptr<uint8_t>(y);
+      for (int x = 0; x < skel.cols; ++x) {
+        if (row[x] > 0) {
+          int xx = x + roi.x;
+          int yy = y + roi.y;
+          if (inBounds(xx, yy, dbg.cols, dbg.rows)) {
+            dbg.at<cv::Vec3b>(yy, xx) = cv::Vec3b(0, 255, 0);
+          }
+        }
+      }
+    }
+
+    // Draw sampled points (red)
+    for (const auto& p : sampled_px) {
+      cv::circle(dbg, p, 2, cv::Scalar(0, 0, 255), -1);
+    }
+
+    dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg).toImageMsg());
+  }
+
+private:
+  ros::NodeHandle nh_;
+  image_transport::ImageTransport it_;
+  image_transport::Subscriber img_sub_;
+
+  ros::Publisher path_pub_;
+  ros::Publisher marker_pub_;
+
+  image_transport::Publisher dbg_pub_;
+  image_transport::Publisher mask_pub_;
+  image_transport::Publisher skel_pub_;
+
+  std::string image_topic_, frame_id_;
+
+
+  // paper magnitudes
+  double paper_w_m_ = 0.210;
+  double paper_h_m_ = 0.297;
+
+  // Aruco parameters
+  double aruco_marker_size_ = 0.06;
+  double paper_w1_margin_offset_ = 0.015;
+  double paper_h1_margin_offset_ = 0.018;
+  double paper_w2_margin_offset_ = 0.015;
+  double paper_h2_margin_offset_ = 0.018;
+  double paper_w3_margin_offset_ = 0.015;
+  double paper_h3_margin_offset_ = 0.018;
+  double paper_w4_margin_offset_ = 0.015;
+  double paper_h4_margin_offset_ = 0.018;
+  
+
+  // aruco parameters
+  int aruco_dict_id_ = (int)cv::aruco::DICT_4X4_50;
+  int id_tl_ = 0, id_tr_ = 1, id_bl_ = 2, id_br_ = 3;
+  cv::Ptr<cv::aruco::Dictionary> dict_;
+  cv::Ptr<cv::aruco::DetectorParameters> params_;
+
+  // hsv values
+  int h_low_ = 75, h_high_ = 130;
+  int s_low_ = 20, v_low_ = 40;
+
+  // roi (optional)
+  int roi_x_ = 0, roi_y_ = 0, roi_w_ = 0, roi_h_ = 0;
+
+  // morph
+  int morph_ksize_ = 3;
+
+  // sampling step
+  int sample_step_px_ = 6;
+};
+
+int main(int argc, char** argv)
+{
+  ros::init(argc, argv, "weld_line_vision_node");
+  //ros::init(argc, argv, "weld_line_vision_aruco");
+  ros::NodeHandle nh("~");
+  TrajectoryGenerator node(nh);
+  ros::spin();
+  return 0;
+}

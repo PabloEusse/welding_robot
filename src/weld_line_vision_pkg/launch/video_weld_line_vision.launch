@@ -1,0 +1,27 @@
+<launch>
+  <node pkg="weld_line_vision"
+        type="weld_line_vision_node"
+        name="weld_line_vision"
+        output="screen">
+
+    <param name="use_video_file" value="true"/>
+    <param name="video_path" value="$(env HOME)/Videos/red_line.mp4"/>
+    <param name="video_fps" value="10"/>
+    <param name="loop" value="true"/>
+
+    <param name="frame_id" value="camera_optical_frame"/>
+    <param name="assumed_depth_m" value="0.6"/>
+
+    <param name="step_u" value="3"/>
+    <param name="min_red_pixels" value="2"/>
+
+    <param name="h1_low" value="0"/>
+    <param name="h1_high" value="15"/>
+    <param name="h2_low" value="165"/>
+    <param name="h2_high" value="179"/>
+    <param name="s_low" value="40"/>
+    <param name="v_low" value="40"/>
+
+    <param name="morph_ksize" value="9"/>
+  </node>
+</launch>
