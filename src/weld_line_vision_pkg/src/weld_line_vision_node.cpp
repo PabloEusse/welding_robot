@@ -4,9 +4,11 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Transform.h>
 #include <geometry_msgs/TransformStamped.h>
 
 #include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
 #include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <visualization_msgs/Marker.h>
@@ -14,6 +16,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/ximgproc.hpp>
 #include <opencv2/aruco.hpp>      
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 
@@ -53,6 +56,7 @@ public:
     nh_.param<int>("id_robot_bottom", id_robot_bottom_, 17); // ID 17 (bottom marker)
     nh_.param<double>("robot_marker_size", robot_marker_size_, 0.10); // 10cm
     nh_.param<double>("robot_marker_distance", robot_marker_distance_, 0.20); // Distance between robot markers
+    nh_.param<double>("robot_base_y_offset_m", robot_base_y_offset_m_, 0.0); // Lateral offset in workspace frame
     nh_.param<std::string>("robot_base_frame", robot_base_frame_, "robot_base_link");
 
     // HSV values for the chosen color (cyan blue).
@@ -73,9 +77,15 @@ public:
     // Sampling along skeleton
     nh_.param<int>("sample_step_px", sample_step_px_, 6);
     nh_.param<bool>("rotate_image_90_cw", rotate_image_90_cw_, false);
+    nh_.param<bool>("use_camera_separate_calibration", use_camera_separate_calibration_, true);
+    nh_.param<bool>("allow_homography_fallback_for_robot_pose", allow_homography_fallback_for_robot_pose_, false);
+    nh_.param<std::string>("camera_info_topic", camera_info_topic_, "/droidcam/camera_info");
+    // Backward compatibility with older launch files.
+    nh_.param<std::string>("info_topic", camera_info_topic_, camera_info_topic_);
 
     // Subscribers 
     img_sub_  = it_.subscribe(image_topic_, 1, &TrajectoryGenerator::imgCallback, this);
+    cam_info_sub_ = nh_.subscribe(camera_info_topic_, 1, &TrajectoryGenerator::cameraInfoCallback, this);
 
     // Publishers
     path_pub_   = nh_.advertise<nav_msgs::Path>("weld_path", 1);
@@ -96,6 +106,10 @@ public:
     params_->minDistanceToBorder = 3;
 
     ROS_INFO("Trajectory Generator initialized. Subscribing to: %s", image_topic_.c_str());
+    ROS_INFO("Camera info topic: %s", camera_info_topic_.c_str());
+    ROS_INFO("Robot pose mode: %s", use_camera_separate_calibration_ ? "camera-separate (PnP)" : "workspace-homography");
+    ROS_INFO("Robot pose fallback to homography: %s", allow_homography_fallback_for_robot_pose_ ? "enabled" : "disabled");
+    ROS_INFO("Robot base Y offset: %.4f m", robot_base_y_offset_m_);
     //ROS_INFO("Paper size: %.3f x %.3f m, frame_id=%s", paper_w_m_, paper_h_m_, frame_id_.c_str());
     ROS_INFO("ArUco ids: TL=%d TR=%d BL=%d BR=%d (dict=%d)", id_tl_, id_tr_, id_bl_, id_br_, aruco_dict_id_);
   }
@@ -105,6 +119,182 @@ private:
   {
     return (x >= -margin && x <= (paper_w_m_ + margin) &&
             y >= -margin && y <= (paper_h_m_ + margin));
+  }
+
+  void cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg)
+  {
+    if (msg->K[0] <= 0.0 || msg->K[4] <= 0.0) {
+      ROS_WARN_THROTTLE(2.0, "Invalid camera intrinsics on %s (fx/fy <= 0).",
+                        camera_info_topic_.c_str());
+      return;
+    }
+
+    camera_matrix_ = cv::Mat::zeros(3, 3, CV_64F);
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 3; ++c) {
+        camera_matrix_.at<double>(r, c) = msg->K[r * 3 + c];
+      }
+    }
+
+    const int dsize = std::max<size_t>(msg->D.size(), 5);
+    dist_coeffs_ = cv::Mat::zeros(dsize, 1, CV_64F);
+    for (size_t i = 0; i < msg->D.size(); ++i) {
+      dist_coeffs_.at<double>((int)i, 0) = msg->D[i];
+    }
+
+    camera_frame_id_ = msg->header.frame_id.empty() ? "camera_optical_frame" : msg->header.frame_id;
+
+    if (!has_camera_info_) {
+      ROS_INFO("Received camera intrinsics from %s (frame=%s).",
+               camera_info_topic_.c_str(), camera_frame_id_.c_str());
+    }
+    has_camera_info_ = true;
+  }
+
+  static bool normalizeVec(cv::Vec3d& v)
+  {
+    const double n = cv::norm(v);
+    if (!std::isfinite(n) || n < 1e-9) return false;
+    v /= n;
+    return true;
+  }
+
+  static tf2::Matrix3x3 cvMatToTf3x3(const cv::Mat& R)
+  {
+    return tf2::Matrix3x3(
+      R.at<double>(0, 0), R.at<double>(0, 1), R.at<double>(0, 2),
+      R.at<double>(1, 0), R.at<double>(1, 1), R.at<double>(1, 2),
+      R.at<double>(2, 0), R.at<double>(2, 1), R.at<double>(2, 2)
+    );
+  }
+
+  static std::vector<cv::Point3f> markerObjectPoints(double marker_size_m)
+  {
+    const float s = static_cast<float>(marker_size_m * 0.5);
+    return {
+      cv::Point3f(-s,  s, 0.f), // top-left
+      cv::Point3f( s,  s, 0.f), // top-right
+      cv::Point3f( s, -s, 0.f), // bottom-right
+      cv::Point3f(-s, -s, 0.f)  // bottom-left
+    };
+  }
+
+  bool estimateSingleMarkerPoseInCamera(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners,
+      int target_id,
+      double marker_size_m,
+      cv::Vec3d& rvec,
+      cv::Vec3d& tvec) const
+  {
+    if (!has_camera_info_) return false;
+
+    for (size_t i = 0; i < ids.size(); ++i) {
+      if (ids[i] != target_id) continue;
+      const std::vector<cv::Point3f> obj_pts = markerObjectPoints(marker_size_m);
+      const bool ok = cv::solvePnP(
+        obj_pts, corners[i], camera_matrix_, dist_coeffs_,
+        rvec, tvec, false, cv::SOLVEPNP_IPPE_SQUARE);
+      return ok;
+    }
+    return false;
+  }
+
+  bool computeWorkspacePoseInCamera(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners,
+      cv::Mat& R_cam_ws,
+      cv::Vec3d& t_cam_ws) const
+  {
+    if (!has_camera_info_) return false;
+
+    auto findCenterById = [&](int target_id, cv::Point2f& out_center) -> bool {
+      for (size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i] == target_id) {
+          out_center = markerCenter(corners[i]);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    cv::Point2f c_tl, c_tr, c_bl, c_br;
+    const bool ok =
+      findCenterById(id_tl_, c_tl) &&
+      findCenterById(id_tr_, c_tr) &&
+      findCenterById(id_bl_, c_bl) &&
+      findCenterById(id_br_, c_br);
+    if (!ok) return false;
+
+    const std::vector<cv::Point2f> paper_pts = computeAuroCenters();
+    std::vector<cv::Point3f> obj_pts;
+    obj_pts.reserve(4);
+    for (const auto& p : paper_pts) {
+      obj_pts.emplace_back(p.x, p.y, 0.f);
+    }
+
+    const std::vector<cv::Point2f> img_pts = {c_tl, c_tr, c_bl, c_br};
+    cv::Vec3d rvec_ws;
+    if (!cv::solvePnP(obj_pts, img_pts, camera_matrix_, dist_coeffs_, rvec_ws, t_cam_ws, false, cv::SOLVEPNP_ITERATIVE)) {
+      return false;
+    }
+
+    cv::Rodrigues(rvec_ws, R_cam_ws);
+    return true;
+  }
+
+  bool computeRobotBasePoseInCamera(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners,
+      cv::Mat& R_cam_base,
+      cv::Vec3d& t_cam_base) const
+  {
+    cv::Vec3d rvec7, tvec7, rvec17, tvec17;
+    const bool ok7 = estimateSingleMarkerPoseInCamera(ids, corners, id_robot_top_, robot_marker_size_, rvec7, tvec7);
+    const bool ok17 = estimateSingleMarkerPoseInCamera(ids, corners, id_robot_bottom_, robot_marker_size_, rvec17, tvec17);
+    if (!ok7 || !ok17) return false;
+
+    cv::Mat R_cam_m7;
+    cv::Rodrigues(rvec7, R_cam_m7);
+
+    // X axis: normal to marker 7 plane.
+    cv::Vec3d x_axis(
+      R_cam_m7.at<double>(0, 2),
+      R_cam_m7.at<double>(1, 2),
+      R_cam_m7.at<double>(2, 2));
+    if (!normalizeVec(x_axis)) return false;
+
+    // Z axis: direction from marker 17 -> marker 7, orthogonalized against X.
+    cv::Vec3d z_axis = tvec7 - tvec17;
+    z_axis -= x_axis * z_axis.dot(x_axis);
+    if (!normalizeVec(z_axis)) {
+      ROS_WARN_THROTTLE(2.0, "Robot Z axis from IDs %d->%d is degenerate.",
+                        id_robot_bottom_, id_robot_top_);
+      return false;
+    }
+
+    // Y axis: left direction on the marker 7 plane.
+    cv::Vec3d y_axis = z_axis.cross(x_axis);
+    if (!normalizeVec(y_axis)) return false;
+
+    // Re-orthogonalize Z for numerical stability.
+    z_axis = x_axis.cross(y_axis);
+    if (!normalizeVec(z_axis)) return false;
+
+    R_cam_base = cv::Mat::zeros(3, 3, CV_64F);
+    R_cam_base.at<double>(0, 0) = x_axis[0];
+    R_cam_base.at<double>(1, 0) = x_axis[1];
+    R_cam_base.at<double>(2, 0) = x_axis[2];
+    R_cam_base.at<double>(0, 1) = y_axis[0];
+    R_cam_base.at<double>(1, 1) = y_axis[1];
+    R_cam_base.at<double>(2, 1) = y_axis[2];
+    R_cam_base.at<double>(0, 2) = z_axis[0];
+    R_cam_base.at<double>(1, 2) = z_axis[1];
+    R_cam_base.at<double>(2, 2) = z_axis[2];
+
+    // Origin at marker 7 center.
+    t_cam_base = tvec7;
+    return true;
   }
 
   static inline bool inBounds(int x, int y, int w, int h)
@@ -209,6 +399,30 @@ private:
     return c;
   }
 
+  static cv::Point2f pointFromRotated90CWToOriginal(const cv::Point2f& p_rot, int original_rows)
+  {
+    // Rotation used in the pipeline: original -> rotated is 90deg CW.
+    // Here we invert it so camera PnP uses coordinates compatible with camera_info.
+    return cv::Point2f(p_rot.y, static_cast<float>(original_rows - 1) - p_rot.x);
+  }
+
+  static std::vector<std::vector<cv::Point2f>> unrotateCorners90CWToOriginal(
+      const std::vector<std::vector<cv::Point2f>>& corners_rot,
+      int original_rows)
+  {
+    std::vector<std::vector<cv::Point2f>> corners_orig;
+    corners_orig.reserve(corners_rot.size());
+    for (const auto& one_marker : corners_rot) {
+      std::vector<cv::Point2f> marker_orig;
+      marker_orig.reserve(one_marker.size());
+      for (const auto& p : one_marker) {
+        marker_orig.emplace_back(pointFromRotated90CWToOriginal(p, original_rows));
+      }
+      corners_orig.emplace_back(marker_orig);
+    }
+    return corners_orig;
+  }
+
   static std::string idsToString(const std::vector<int>& ids)
   {
     if (ids.empty()) return "none";
@@ -220,7 +434,7 @@ private:
     return oss.str();
   }
 
-  std::vector<cv::Point2f> computeAuroCenters()
+  std::vector<cv::Point2f> computeAuroCenters() const
   {
     std::vector<cv::Point2f> paper_pts;
     paper_pts.reserve(4);
@@ -375,7 +589,7 @@ private:
     workspace_marker_pub_.publish(ws_marker);
   }
 
-  bool computeRobotBaseTransform(
+  bool computeRobotBaseTransformFromHomography(
       const std::vector<int>& ids,
       const std::vector<std::vector<cv::Point2f>>& corners,
       const cv::Mat& H_img_to_paper,
@@ -478,24 +692,131 @@ private:
     return true;
   }
 
+  bool computeRobotBaseTransformFromCamera(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners,
+      const ros::Time& stamp)
+  {
+    cv::Mat R_cam_ws, R_cam_base;
+    cv::Vec3d t_cam_ws, t_cam_base;
+
+    if (!computeWorkspacePoseInCamera(ids, corners, R_cam_ws, t_cam_ws)) {
+      ROS_WARN_THROTTLE(2.0, "Workspace pose in camera frame unavailable (need IDs %d,%d,%d,%d).",
+                        id_tl_, id_tr_, id_bl_, id_br_);
+      return false;
+    }
+
+    if (!computeRobotBasePoseInCamera(ids, corners, R_cam_base, t_cam_base)) {
+      ROS_WARN_THROTTLE(2.0, "Robot base pose in camera frame unavailable (need IDs %d and %d).",
+                        id_robot_top_, id_robot_bottom_);
+      return false;
+    }
+
+    // Compose relative transform via camera frame:
+    // T_ws_base = inv(T_cam_ws) * T_cam_base
+    const tf2::Transform T_cam_ws(
+      cvMatToTf3x3(R_cam_ws),
+      tf2::Vector3(t_cam_ws[0], t_cam_ws[1], t_cam_ws[2]));
+    const tf2::Transform T_cam_base(
+      cvMatToTf3x3(R_cam_base),
+      tf2::Vector3(t_cam_base[0], t_cam_base[1], t_cam_base[2]));
+
+    const tf2::Transform T_ws_base = T_cam_ws.inverse() * T_cam_base;
+    tf2::Vector3 p = T_ws_base.getOrigin();
+    tf2::Matrix3x3 R = T_ws_base.getBasis();
+
+    // Desired convention correction:
+    // rotate the composed robot pose by 180 deg around workspace +Y axis.
+    // p' = Ry(pi) * p, R' = Ry(pi) * R
+    const tf2::Matrix3x3 Ry_pi(
+      -1.0, 0.0,  0.0,
+       0.0, 1.0,  0.0,
+       0.0, 0.0, -1.0);
+    p = Ry_pi * p;
+    R = Ry_pi * R;
+
+    // Additional correction: rotate orientation by 180 deg around robot local +Z.
+    const tf2::Matrix3x3 Rz_pi(
+      -1.0,  0.0, 0.0,
+       0.0, -1.0, 0.0,
+       0.0,  0.0, 1.0);
+    R = R * Rz_pi;
+
+    // Apply translation offset only (no axis/orientation change).
+    p.setY(p.y() + robot_base_y_offset_m_);
+
+    tf2::Quaternion q;
+    R.getRotation(q);
+
+    geometry_msgs::TransformStamped transform_stamped;
+    transform_stamped.header.stamp = stamp;
+    transform_stamped.header.frame_id = frame_id_;
+    transform_stamped.child_frame_id = robot_base_frame_;
+    transform_stamped.transform.translation.x = p.x();
+    transform_stamped.transform.translation.y = p.y();
+    transform_stamped.transform.translation.z = p.z();
+    transform_stamped.transform.rotation.x = q.x();
+    transform_stamped.transform.rotation.y = q.y();
+    transform_stamped.transform.rotation.z = q.z();
+    transform_stamped.transform.rotation.w = q.w();
+    tf_broadcaster_.sendTransform(transform_stamped);
+
+    double roll, pitch, yaw_out;
+    R.getRPY(roll, pitch, yaw_out);
+    ROS_INFO_THROTTLE(5.0, "Robot base (camera-separated): ws pos=(%.3f, %.3f, %.3f)m, rpy=(%.2f, %.2f, %.2f) deg",
+                      p.x(), p.y(), p.z(),
+                      roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw_out * 180.0 / M_PI);
+
+    return true;
+  }
+
+  bool computeRobotBaseTransform(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners_for_camera,
+      const std::vector<std::vector<cv::Point2f>>& corners_for_homography,
+      const cv::Mat& H_img_to_paper,
+      const ros::Time& stamp)
+  {
+    if (use_camera_separate_calibration_) {
+      if (!has_camera_info_) {
+        ROS_WARN_THROTTLE(2.0, "No camera_info yet on %s for camera-separated robot pose.",
+                          camera_info_topic_.c_str());
+        if (!allow_homography_fallback_for_robot_pose_) return false;
+      } else if (computeRobotBaseTransformFromCamera(ids, corners_for_camera, stamp)) {
+        return true;
+      } else {
+        ROS_WARN_THROTTLE(2.0, "Camera-separated robot pose failed.");
+        if (!allow_homography_fallback_for_robot_pose_) return false;
+      }
+      ROS_WARN_THROTTLE(2.0, "Falling back to homography robot pose.");
+    }
+
+    return computeRobotBaseTransformFromHomography(ids, corners_for_homography, H_img_to_paper, stamp);
+  }
+
   void imgCallback(const sensor_msgs::ImageConstPtr& msg)
   {
-    cv::Mat bgr_full;
+    cv::Mat bgr_raw;
     try {
-      bgr_full = cv_bridge::toCvCopy(msg, "bgr8")->image;
+      bgr_raw = cv_bridge::toCvCopy(msg, "bgr8")->image;
     } catch (const std::exception& e) {
       ROS_WARN("cv_bridge: %s", e.what());
       return;
     }
 
+    cv::Mat bgr_full = bgr_raw;
     if (rotate_image_90_cw_) {
-      cv::rotate(bgr_full, bgr_full, cv::ROTATE_90_CLOCKWISE);
+      cv::rotate(bgr_raw, bgr_full, cv::ROTATE_90_CLOCKWISE);
     }
 
     // Detect all ArUco markers
     std::vector<int> ids;
     std::vector<std::vector<cv::Point2f>> corners;
     cv::aruco::detectMarkers(bgr_full, dict_, corners, ids, params_);
+    std::vector<std::vector<cv::Point2f>> corners_for_camera = corners;
+    if (rotate_image_90_cw_) {
+      corners_for_camera = unrotateCorners90CWToOriginal(corners, bgr_raw.rows);
+    }
 
     // Keep workspace boundary visible in RViz even when ArUco is not detected yet.
     publishWorkspaceMarker(msg->header.stamp);
@@ -521,7 +842,7 @@ private:
     cv::polylines(dbg_aruco, workspace_poly_img, true, cv::Scalar(255, 255, 0), 2);
 
     // Compute and publish robot base transform from markers 7 and 17
-    computeRobotBaseTransform(ids, corners, H, msg->header.stamp);
+    computeRobotBaseTransform(ids, corners_for_camera, corners, H, msg->header.stamp);
 
     // ROI for color processing (optional)
     cv::Rect roi(0, 0, bgr_full.cols, bgr_full.rows);
@@ -661,6 +982,7 @@ private:
   ros::NodeHandle nh_;
   image_transport::ImageTransport it_;
   image_transport::Subscriber img_sub_;
+  ros::Subscriber cam_info_sub_;
 
   ros::Publisher path_pub_;
   ros::Publisher marker_pub_;
@@ -674,6 +996,14 @@ private:
 
   std::string image_topic_, frame_id_;
   std::string robot_base_frame_;
+  std::string camera_info_topic_;
+  std::string camera_frame_id_ = "camera_optical_frame";
+
+  cv::Mat camera_matrix_;
+  cv::Mat dist_coeffs_;
+  bool has_camera_info_ = false;
+  bool use_camera_separate_calibration_ = true;
+  bool allow_homography_fallback_for_robot_pose_ = false;
 
 
   // paper magnitudes
@@ -703,6 +1033,7 @@ private:
   int id_robot_bottom_ = 17;
   double robot_marker_size_ = 0.10;
   double robot_marker_distance_ = 0.20;
+  double robot_base_y_offset_m_ = 0.0;
 
   // hsv values
   int h_low_ = 75, h_high_ = 130;

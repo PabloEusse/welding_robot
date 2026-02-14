@@ -7,6 +7,14 @@
   <arg name="framerate" default="30" />
   <arg name="io_method" default="read" />
   <arg name="rotate_image_90_cw" default="true" />
+  <arg name="camera_info_url" default="" />
+  <arg name="use_camera_separate_calibration" default="true" />
+  <arg name="allow_homography_fallback_for_robot_pose" default="false" />
+  <arg name="robot_base_y_offset_m" default="0.0" />
+  <arg name="id_tl" default="0" />
+  <arg name="id_tr" default="1" />
+  <arg name="id_bl" default="2" />
+  <arg name="id_br" default="3" />
 
   <!-- Robot model selection -->
   <arg name="robot_model" default="$(find weld_line_vision)/urdf/ur10_joint_limited_no_world.urdf.xacro" />
@@ -39,6 +47,7 @@
     <param name="io_method" value="$(arg io_method)"/>
     <param name="camera_frame_id" value="camera_optical_frame"/>
     <param name="camera_name" value="droidcam"/>
+    <param name="camera_info_url" value="$(arg camera_info_url)"/>
   </node>
 
   <!-- ============================================== -->
@@ -47,7 +56,11 @@
   <node pkg="weld_line_vision" type="weld_line_vision_node" name="weld_line_vision" output="screen">
     <!-- Image topic -->
     <param name="image_topic" value="/droidcam/image_raw"/>
+    <param name="camera_info_topic" value="/droidcam/camera_info"/>
     <param name="rotate_image_90_cw" value="$(arg rotate_image_90_cw)"/>
+    <param name="use_camera_separate_calibration" value="$(arg use_camera_separate_calibration)"/>
+    <param name="allow_homography_fallback_for_robot_pose" value="$(arg allow_homography_fallback_for_robot_pose)"/>
+    <param name="robot_base_y_offset_m" value="$(arg robot_base_y_offset_m)"/>
 
     <!-- Frame IDs -->
     <param name="frame_id" value="workspace_frame"/>
@@ -60,10 +73,10 @@
     <!-- ArUco workspace markers (IDs 0,1,2,3 = 6cm markers) -->
     <param name="aruco_dict_id" value="0"/> <!-- DICT_4X4_50 -->
     <param name="aruco_marker_size" value="0.06"/>
-    <param name="id_tl" value="0"/>  <!-- Top Left -->
-    <param name="id_tr" value="1"/>  <!-- Top Right -->
-    <param name="id_bl" value="2"/>  <!-- Bottom Left -->
-    <param name="id_br" value="3"/>  <!-- Bottom Right -->
+    <param name="id_tl" value="$(arg id_tl)"/>  <!-- Top Left -->
+    <param name="id_tr" value="$(arg id_tr)"/>  <!-- Top Right -->
+    <param name="id_bl" value="$(arg id_bl)"/>  <!-- Bottom Left -->
+    <param name="id_br" value="$(arg id_br)"/>  <!-- Bottom Right -->
 
     <!-- ArUco robot base markers (IDs 7=top, 17=bottom, 10cm markers) -->
     <param name="id_robot_top" value="7"/>
