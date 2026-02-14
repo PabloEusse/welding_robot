@@ -6,12 +6,14 @@ namespace tum_ics_ur_robot_lli
 
 AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_topic)
     : nh_(nh),
-      sensor_connected_(false)
+      sensor_connected_(false),
+      model_("ur10_model")
 {
   // Initialize vectors
   F_ext_.setZero();
   T_ext_.setZero();
   F_desired_.setZero();
+  //F_desired_ << 0.0, 0.0, 0.2;
   x_.setZero();
   x_dot_.setZero();
   x_ddot_.setZero();
@@ -19,9 +21,9 @@ AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_to
   // Default admittance parameters (tuned for end effector drawing)
   // Z-axis: compliant for force control
   // X,Y: stiff (position control mode by default)
-  M_d_ << 5.0, 5.0, 2.0;    // Virtual mass [kg]
-  D_d_ << 100.0, 100.0, 40.0;  // Virtual damping [Ns/m]
-  K_d_ << 0.0, 0.0, 0.0;    // Virtual stiffness [N/m] - 0 for pure force tracking
+  M_d_ << 5.0, 5.0, 5;    // Virtual mass [kg]
+  D_d_ << 1000.0, 1000.0, 900.0;  // Virtual damping [Ns/m] - with 60 = xddot_offset = 2.3683 at state transition, with 70 = 10^-6
+  K_d_ << 0.0, 0.0, 0.05;    // Virtual stiffness [N/m] - 0 for pure force tracking - activate for testing
 
   // Default: X,Y position control, Z force control
   axis_modes_ = {AxisMode::POSITION, AxisMode::POSITION, AxisMode::FORCE};
@@ -99,7 +101,7 @@ void AdmittanceFilter::reset()
   ROS_INFO("AdmittanceFilter: State reset");
 }
 
-Vector3d AdmittanceFilter::update(double dt)
+Vector3d AdmittanceFilter::update(double dt, const cc::JointPosition& q)
 {
   if (dt <= 0.0 || dt > 0.1)
   {
@@ -115,7 +117,7 @@ Vector3d AdmittanceFilter::update(double dt)
     // set F_ext to some test value if sensor is not connected for testing without hardware
     if (!sensor_connected_)
     {
-      F_ext << 0.0, 0.0, -5.0; // Simulate constant 5N downward force for testing
+      F_ext << 0.0, 0.0, -50.0; // Simulate constant 5N downward force for testing
     }
   }
 
@@ -125,6 +127,37 @@ Vector3d AdmittanceFilter::update(double dt)
     ROS_WARN_THROTTLE(1.0, "AdmittanceFilter: FT sensor timeout!");
     sensor_connected_ = false;
   }
+
+  // Check joint configuration validity BEFORE using it
+  bool q_valid = true;
+  for (int i = 0; i < q.size(); i++)
+  {
+    if (!std::isfinite(q(i)))
+    {
+      ROS_ERROR_STREAM_THROTTLE(1.0, "AdmittanceFilter: Joint " << i << " is invalid: " << q(i));
+      q_valid = false;
+    }
+  }
+  
+  if (!q_valid)
+  {
+    ROS_ERROR_STREAM_THROTTLE(1.0, "AdmittanceFilter: Invalid joint configuration, skipping update. q = " << q.transpose());
+    return x_;  // Return current offset without updating
+  }
+  
+  // transform F_ext form end effector frame to world frame using current robot state
+  Eigen::Matrix4d T_ef_w_inv = model_.T_ef_w_inv(q).matrix();
+  //ROS_INFO_STREAM_THROTTLE(0.5, "AdmittanceFilter: T_ef_w_inv:\n" << model_.T_ef_w_inv);
+  
+  // Check for NaN in transformation (indicates bad joint config or model issue)
+  if (!T_ef_w_inv.allFinite())
+  {
+    ROS_ERROR_STREAM_THROTTLE(1.0, "AdmittanceFilter: T_ef_w_inv contains NaN! Joint config: " << q.transpose());
+    ROS_ERROR_STREAM_THROTTLE(1.0, "T_ef_w_inv:\n" << T_ef_w_inv);
+    return x_;  // Return current offset without updating
+  }
+  
+  F_ext = T_ef_w_inv.block<3, 3>(0, 0) * F_ext;
 
   // ========================================================================
   // FORCE ERROR COMPUTATION
@@ -154,7 +187,7 @@ Vector3d AdmittanceFilter::update(double dt)
   //   - K * x provides spring-like return to equilibrium
   //   - M determines response speed (larger M = slower, more stable)
   // ========================================================================
-  Vector3d x_ddot;
+  Vector3d x_ddot = Vector3d::Zero();  // Initialize to prevent NaN
 
   for (int i = 0; i < 3; i++)
   {
@@ -184,6 +217,15 @@ Vector3d AdmittanceFilter::update(double dt)
   // Store acceleration for external access
   x_ddot_ = x_ddot;
 
+  // Check for NaN in outputs
+  if (!x_ddot_.allFinite() || !x_dot_.allFinite() || !x_.allFinite())
+  {
+    ROS_ERROR_STREAM_THROTTLE(0.5, "AdmittanceFilter: NaN detected! "
+                               << "x_ddot=" << x_ddot_.transpose()
+                               << " x_dot=" << x_dot_.transpose()
+                               << " x=" << x_.transpose()
+                               << " F_error=" << F_error.transpose());
+  }
   // ========================================================================
   // NUMERICAL INTEGRATION (Forward Euler)
   // ========================================================================
@@ -230,11 +272,11 @@ void AdmittanceFilter::ftSensorCallback(const geometry_msgs::WrenchStamped::Cons
   F_ext_(0) = msg->wrench.force.x;
   F_ext_(1) = msg->wrench.force.y;
   F_ext_(2) = msg->wrench.force.z;
-
+  //F_ext_ = model_.T_ef_w_inv(q).matrix().block<3, 3>(0, 0) * F_ext_;
   T_ext_(0) = msg->wrench.torque.x;
   T_ext_(1) = msg->wrench.torque.y;
   T_ext_(2) = msg->wrench.torque.z;
-
+  //T_ext_ = model_.T_ef_w_inv(q).matrix().block<3, 3>(0, 0) * T_ext_;
   last_ft_time_ = msg->header.stamp;
   sensor_connected_ = true;
 }

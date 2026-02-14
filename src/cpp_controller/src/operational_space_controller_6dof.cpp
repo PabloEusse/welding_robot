@@ -420,7 +420,8 @@ namespace tum_ics_ur_robot_lli
 
       // Get track position in Cartesian space (compute FK for start_track_pose_)
       Vector3d track_pos_cartesian = getEndEffectorPosition(start_track_pose_);
-      track_pos_cartesian << -0.65, 0.0, 0.2; // Override with fixed position for testing
+      // end effector height = 49-20 = 29cm, difference between base and tabel = table 8cm lower
+      track_pos_cartesian << -0.65, 0.0, 0.29-0.09-0.02; // Override with fixed position for testing
 
       double omega = 2.0 * M_PI / t_TRACK_SLOW_;
       double omega_z = omega * 15.0;
@@ -476,14 +477,14 @@ namespace tum_ics_ur_robot_lli
         // Circle centered at orbital_center_, radius = circle_radius_
         // At theta=0: x = center + radius*cos(0) = center + radius
         // So orbital_center_ was set to last_X_ - [radius, 0, 0] in updateStateMachine
-        x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
-        x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
+        x_des(0) = orbital_center_(0); //+ circle_radius_ * std::cos(theta);
+        x_des(1) = orbital_center_(1);// + circle_radius_ * std::sin(theta);
         //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
         x_des(2) = orbital_center_(2);
 
         // totally removing x_dot_des makes no difference, robot still occilates in z direction
-        xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
-        xdot_des(1) = circle_radius_ * omega * std::cos(theta);
+        xdot_des(0) = 0; //-circle_radius_ * omega * std::sin(theta);
+        xdot_des(1) = 0; //circle_radius_ * omega * std::cos(theta);
         //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
         xdot_des(2) = 0;
         break;
@@ -494,13 +495,13 @@ namespace tum_ics_ur_robot_lli
         // Same continuous trajectory but faster
         double theta = omega_fast * offset;
         
-        x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
-        x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
+        x_des(0) = orbital_center_(0) ;//+ circle_radius_ * std::cos(theta);
+        x_des(1) = orbital_center_(1);// + circle_radius_ * std::sin(theta);
         //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z_fast * theta);
         x_des(2) = orbital_center_(2);
 
-        xdot_des(0) = -circle_radius_ * omega_fast * std::sin(theta);
-        xdot_des(1) = circle_radius_ * omega_fast * std::cos(theta);
+        xdot_des(0) =0 ;// -circle_radius_ * omega_fast * std::sin(theta);
+        xdot_des(1) = 0;//circle_radius_ * omega_fast * std::cos(theta);
         //xdot_des(2) = vertical_amplitude_ * omega_z_fast * std::cos(omega_z_fast * theta);
         xdot_des(2) = 0;
         break;
@@ -578,40 +579,69 @@ namespace tum_ics_ur_robot_lli
       Vector3d x_des_modified = x_des;
       Vector3d xdot_des_modified = xdot_des;
       Vector3d xddot_des_modified = xddot_des;
-
+      Eigen::Matrix<double, 3, 3> selectionMatrixAdmittance = Matrix3d::Zero();
+      selectionMatrixAdmittance << 0, 0, 0,
+                                   0, 0, 0,
+                                   0, 0, 1;
       if (use_admittance_ && admittance_filter_)
       {
-        // Get admittance offset: x_a from M*x_ddot + D*x_dot + K*x = F_ext - F_des
-        Vector3d x_offset = admittance_filter_->update(dt);
-        Vector3d xdot_offset = admittance_filter_->getVelocityOffset();
-        Vector3d xddot_offset = admittance_filter_->getAccelerationOffset();
+        // Debug: Check joint configuration before passing to admittance filter
+        bool joints_valid = true;
+        for (int i = 0; i < 6; i++)
+        {
+          if (!std::isfinite(state.q(i)))
+          {
+            ROS_ERROR_STREAM_THROTTLE(0.5, "[CART CTRL] Joint " << i << " is NaN/Inf: " << state.q(i));
+            joints_valid = false;
+          }
+        }
+        
+        if (!joints_valid)
+        {
+          ROS_ERROR_STREAM_THROTTLE(0.5, "[CART CTRL] Invalid joint config, skipping admittance. q = " << state.q.transpose());
+        }
+        else
+        {
+          // Get admittance offset: x_a from M*x_ddot + D*x_dot + K*x = F_ext - F_des
+          Vector3d x_offset = admittance_filter_->update(dt, state.q);
+          Vector3d xdot_offset = admittance_filter_->getVelocityOffset();
+          Vector3d xddot_offset = admittance_filter_->getAccelerationOffset();
 
-        // Modify desired trajectory with admittance offset
-        x_des_modified = x_des + x_offset;
-        xdot_des_modified = xdot_des + xdot_offset;
+          // Modify desired trajectory with admittance offset
+          x_des_modified = x_des + selectionMatrixAdmittance * x_offset;
+          xdot_des_modified = xdot_des + selectionMatrixAdmittance * xdot_offset;
+          // NOTE: Adding xddot_des_modified let joint velocities explode
+          xddot_des_modified = xddot_des + selectionMatrixAdmittance * xddot_offset;
+          ROS_INFO_STREAM_THROTTLE(0.5, "[ADMITTANCE] x_offset=" << x_offset.transpose() 
+                                   << " xdot_offset=" << xdot_offset.transpose() 
+                                   << " xddot_offset=" << xddot_offset.transpose());
 
-        // Publish admittance state for debugging
-        std_msgs::Float32MultiArray adm_msg;
-        Vector3d F_ext = admittance_filter_->getExternalForce();
-        adm_msg.data = {
-          static_cast<float>(x_offset(0)),
-          static_cast<float>(x_offset(1)),
-          static_cast<float>(x_offset(2)),
-          static_cast<float>(F_ext(0)),
-          static_cast<float>(F_ext(1)),
-          static_cast<float>(F_ext(2))
-        };
-        admittance_pub_.publish(adm_msg);
+          // Publish admittance state for debugging
+          std_msgs::Float32MultiArray adm_msg;
+          Vector3d F_ext = admittance_filter_->getExternalForce();
+          adm_msg.data = {
+            static_cast<float>(x_offset(0)),
+            static_cast<float>(x_offset(1)),
+            static_cast<float>(x_offset(2)),
+            static_cast<float>(F_ext(0)),
+            static_cast<float>(F_ext(1)),
+            static_cast<float>(F_ext(2))
+          };
+          admittance_pub_.publish(adm_msg);
+        }
         
       }
       
       
       ROS_INFO_STREAM_THROTTLE(0.5,  "[CART CTRL] x_des=" << x_des.transpose()
                                   << " xdot_des=" << xdot_des.transpose()
+                                  << " xddot_des=" << xddot_des.transpose()
                                   <<  " x_des_modified=" << x_des_modified.transpose() 
                                   << " xdot_des_modified=" << xdot_des_modified.transpose() 
+                                  << " xddot_des_modified=" << xddot_des_modified.transpose()
                                   << " x_current=" << x_current.transpose() 
-                                  << " xdot_current=" << xdot_current.transpose());
+                                  << " xdot_current=" << xdot_current.transpose())
+                                  ;
       // Cartesian errors (use modified desired if admittance is enabled)
       Vector3d delta_x = x_current - x_des_modified;
       // ROS_WARN_STREAM("delta_x: " << delta_x.transpose());
