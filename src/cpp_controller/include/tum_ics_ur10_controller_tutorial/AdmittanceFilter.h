@@ -102,7 +102,7 @@ public:
    * @return Velocity offset
    */
   Vector3d getVelocityOffset() const { return x_dot_; }
-
+  Vector3d getAccelerationOffset() const;
   /**
    * @brief Set desired contact force
    * @param F_des Desired force vector [Fx, Fy, Fz] in Newtons
@@ -162,6 +162,7 @@ private:
   // Filter state
   Vector3d x_;       // Position offset
   Vector3d x_dot_;   // Velocity offset
+  Vector3d x_ddot_;  // Acceleration offset (from last update)
 
   // Limits for safety
   Vector3d x_max_;      // Maximum position offset

@@ -8,7 +8,10 @@
 #include <std_msgs/Float32.h>
 #include <Eigen/Dense>
 #include <memory>
-
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/TransformStamped.h>
+#include <tf2_msgs/TFMessage.h>
+#include <nav_msgs/Path.h>
 namespace tum_ics_ur_robot_lli
 {
   namespace RobotControllers
@@ -65,11 +68,15 @@ namespace tum_ics_ur_robot_lli
       ros::Publisher lyapunov_pub_;
       ros::Publisher steady_state_error_pub_;
       ros::Publisher cartesian_pub_;
+      ros::Publisher traj_pose_pub_;
+      ros::Publisher traj_path_pub_;
+      ros::Publisher tf_pub_;
 
       // Gain matrices (3x3 for Cartesian control)
       Matrix3d Kp_PD_;
       Matrix3d Kd_PD_;
       Matrix6d Kreg_PD_;  // 6x6 for joint space regularization
+      Matrix3d Kreg_PD_cart_;
 
       Matrix3d Kp_PID_;
       Matrix3d Kd_PID_;
@@ -79,6 +86,7 @@ namespace tum_ics_ur_robot_lli
       State current_state_;
       ControllerType controller_type_;
       ControlSpace control_space_;
+
 
       // Time parameters
       double t_INIT_;
@@ -94,7 +102,15 @@ namespace tum_ics_ur_robot_lli
       Vector6d last_q_;    // Joint position at last state transition
       Vector3d last_X_;    // Cartesian position at last state transition
 
+      //adding offset
+      Vector6d offset;
+      JointState state_adj;
+      Vector3d x_des_template;
+      
+
+
       // Trajectory parameters
+      Vector6d q0_;
       Vector6d start_track_pose_;   // Joint pose for tracking start
       Vector6d non_singular_pose_;  // Safe non-singular pose
       Vector3d orbital_center_;     // Center of circular trajectory (like Python)
@@ -107,6 +123,10 @@ namespace tum_ics_ur_robot_lli
 
       // Error accumulators
       Vector3d integral_error_acc_;
+
+      // Trajectory visualization (RViz)
+      nav_msgs::Path traj_path_msg_;
+      std::size_t traj_max_points_;
 
       // UR10 DH parameters (stored internally for self-contained kinematics)
       // Standard UR10 parameters
@@ -145,7 +165,13 @@ namespace tum_ics_ur_robot_lli
       // State machine
       void updateStateMachine(double t_elapsed);
 
+      void publishTF_raw(const std::string& parent,
+                   const std::string& child,
+                   double x, double y, double z);
+
       // Trajectory generation
+
+      double jointControl(const Vector6d &q, double gain);
       void generateTrajectory(double t, 
                               Vector6d& q_des, Vector6d& qdot_des, Vector6d& qddot_des,
                               Vector3d& x_des, Vector3d& xdot_des, Vector3d& xddot_des);
@@ -175,7 +201,7 @@ namespace tum_ics_ur_robot_lli
       Eigen::Matrix<double, 6, 6> computeJacobian(const Vector6d& q);
       Eigen::Matrix<double, 6, 6> computeJacobianDotTranslational(const Vector6d& q, const Vector6d& qp);
       Vector6d computeYr_theta(const Vector6d& q, const Vector6d& qdot, const Vector6d& qrdot, const Vector6d& qrddot);
-
+      Vector6d computeReferenceTorques(const Vector6d &q, const Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr);
       Vector3d getEndEffectorPosition(const Vector6d& q);
       Vector3d getEndEffectorVelocity(const Vector6d& q, const Vector6d& qp);
     };

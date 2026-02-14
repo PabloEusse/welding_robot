@@ -2,7 +2,10 @@
 #include <tum_ics_ur_robot_msgs/ControlData.h>
 #include <Eigen/SVD>
 #include <Eigen/Geometry>
-
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/TransformStamped.h>
+#include <tf2_msgs/TFMessage.h>
+#include <nav_msgs/Path.h>
 namespace tum_ics_ur_robot_lli
 {
   namespace RobotControllers
@@ -24,25 +27,41 @@ namespace tum_ics_ur_robot_lli
       d5_ = 0.1157;   // Link offset d5
       d6_ = 0.0922;   // Link offset d6
       // Initialize gain matrices
-      Kp_PD_ = 20.0 * Matrix3d::Identity();
-      Kd_PD_ = 20.0 * Matrix3d::Identity();
+      Kp_PD_ = 5.0 * Matrix3d::Identity();
+      Kp_PD_ << 2.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 10.0;
+      Kd_PD_ = 10.0 * Matrix3d::Identity();
       Kreg_PD_ = Matrix6d::Zero();
-      Kreg_PD_.block<3, 3>(0, 0) = 20.0 * Matrix3d::Identity();
-      Kreg_PD_.block<3, 3>(3, 3) = 1.0 * Matrix3d::Identity();
+      Kreg_PD_.block<3, 3>(0, 0) = 40.0 * Matrix3d::Identity();
+      Kreg_PD_.block<3, 3>(3, 3) = 5 * Matrix3d::Identity();
 
+      Kreg_PD_cart_ = Matrix3d::Zero();
+      Kreg_PD_cart_.block<3, 3>(0, 0) << 500, 0.0, 0.0,
+                                        0.0, 500, 0.0,
+                                        0.0, 0.0, 500;
+      // Kreg_PD_cart_.block<3, 3>(3, 3) = 5.0 * Matrix3d::Identity();
       Kp_PID_ = 5.0 * Matrix3d::Identity();
       Kd_PID_ = 5.0 * Matrix3d::Identity();
       Ki_PID_ = 5.0 * Matrix3d::Identity();
 
+      // Trajectory visualization (RViz)
+      traj_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/desired_trajectory_pose", 10);
+      traj_path_pub_ = nh_.advertise<nav_msgs::Path>("/desired_trajectory_path", 1, true);
+      traj_path_msg_.header.frame_id = "world";
+      traj_max_points_ = 2000;
+
       // Initialize time parameters (matching Python)
       t_INIT_ = 10.0;    // Was 5.0, Python uses 10.0
-      t_LINEAR_ = 10.0;
-      t_TRACK_SLOW_ = 40.0;
-      t_TRACK_FAST_ = 40.0;  // Match Python's 40s
-
+      t_LINEAR_ = 20.0;
+      t_TRACK_SLOW_ = 100.0;
+      t_TRACK_FAST_ = 100.0;  // Match Python's 40s
+      q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0; // Starting pose for trajectory
       // Initialize poses
-      start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0.0, 0.0, 0.0;
-      non_singular_pose_ << 0.0, 0.0, -M_PI / 2.0, 0.0, 0.0, 0.0;  // Match Python
+      start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0, 0.0, 0.0;
+      non_singular_pose_ << 0.0, -M_PI / 2.0, -M_PI / 2, -M_PI / 2, M_PI / 2, 0.0;  // Match Python
+      // test good starting pose for following linear motion: 0, -90, -90, -90, 90, 0;
+      //non_singular_pose_ << 0, -M_PI/2, -M_PI/2, -M_PI/2, M_PI/2, 0;
       
       // Initialize circular trajectory parameters
       orbital_center_.setZero();
@@ -69,10 +88,10 @@ namespace tum_ics_ur_robot_lli
       cartesian_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/cart_coor", 10);
       control_data_pub_ = nh_.advertise<tum_ics_ur_robot_msgs::ControlData>("operational_space_controller_data", 1);
       admittance_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/admittance_state", 10);
-
+      tf_pub_ = nh_.advertise<tf2_msgs::TFMessage>("/tf", 100);
       // Initialize admittance filter
       admittance_filter_ = std::make_unique<AdmittanceFilter>(nh_, "/schunk_netbox/raw");
-      use_admittance_ = false;  // Disabled by default, enable via parameter
+      use_admittance_ = true;  // Disabled by default, enable via parameter
 
     }
 
@@ -145,7 +164,7 @@ namespace tum_ics_ur_robot_lli
       ROS_WARN_STREAM("Kd_PD: \n" << Kd_PD_);
       ROS_WARN_STREAM("Kreg_PD: \n" << Kreg_PD_);
       ROS_WARN_STREAM("Time params - INIT: " << t_INIT_ << ", LINEAR: " << t_LINEAR_
-                      << ", TRACK_SLOW: " << t_TRACK_SLOW_ << ", TRACK_FAST: " << t_TRACK_FAST_);
+                      << ", TRACK_SLOW: " << t_TRACK_SLOW_ << ", TRACK_FAST: " << t_TRACK_FAST_ << ", non_singular: " << non_singular_pose_.transpose());
 
       // Initialize admittance filter
       ros::param::get(ns + "/use_admittance", use_admittance_);
@@ -168,16 +187,25 @@ namespace tum_ics_ur_robot_lli
     }
     Vector6d OperationalSpaceController6DOF::update(const RobotTime &time, const JointState &state)
     {
+      JointState state_adj = state;
+      Vector6d offset;
+      //offset << 0,  M_PI/2, 0, M_PI/2, 0, 0;
+      offset << 0, 0, 0, 0, 0, 0;
+
+      //state_adj.q += offset;
+      // Vector6d offset;
+      // offset << 0,  M_PI/2, 0, M_PI/2, 0, 0;
+      // state_adj.q +=  offset;
       // First iteration initialization
       if (is_first_iter_)
       {
-        q_start_ = state.q;
+        q_start_ = state_adj.q;
         t0_ = time.tD();
         last_t_ = t0_;
-        last_q_ = state.q;
+        last_q_ = state_adj.q;
 
         // Get initial Cartesian position using our FK
-        X_ = getEndEffectorPosition(state.q);
+        X_ = getEndEffectorPosition(state_adj.q);
         last_X_ = X_;
 
         ROS_WARN_STREAM("START [RAD]: \n" << q_start_.transpose());
@@ -191,12 +219,14 @@ namespace tum_ics_ur_robot_lli
       }
 
       // Update current state
-      q_ = state.q;
+      q_ = state_adj.q;
+      //q_ -= [0, M_PI/2, 0, M_PI/2, 0, 0];
       X_ = getEndEffectorPosition(state.q);
-
+      
+      publishTF_raw("world", "ee_link", X_(0), X_(1), X_(2));
       // Calculate elapsed time
       double t_elapsed = time.tD() - t0_;
-      double dt = 0.002; // Assume 500Hz control loop (adjust as needed)
+      double dt = 0.02; // Assume 500Hz control loop (adjust as needed)
 
       // Update state machine
       updateStateMachine(t_elapsed);
@@ -204,7 +234,7 @@ namespace tum_ics_ur_robot_lli
       // Check for singularity (manipulability)
       if (control_space_ == ControlSpace::CARTESIAN)
       {
-        Eigen::Matrix<double, 6, 6> J = computeJacobian(state.q);
+        Eigen::Matrix<double, 6, 6> J = computeJacobian(state_adj.q);
         double w = computeManipulability(J);
         if (w < 0.0)
         {
@@ -220,24 +250,56 @@ namespace tum_ics_ur_robot_lli
       //ROS_WARN_STREAM("x_des: " << x_des.transpose() << " xdot_des: " << xdot_des.transpose() << " xddot_des: " << xddot_des.transpose());
       generateTrajectory(time.tD(), q_des, qdot_des, qddot_des, x_des, xdot_des, xddot_des);
 
+        // Publish desired trajectory for RViz visualization
+        if (current_state_ != State::INIT)
+        {
+          geometry_msgs::PoseStamped pose_msg;
+          pose_msg.header.stamp = ros::Time::now();
+          pose_msg.header.frame_id = traj_path_msg_.header.frame_id;
+          pose_msg.pose.position.x = x_des(0);
+          pose_msg.pose.position.y = x_des(1);
+          pose_msg.pose.position.z = x_des(2);
+          pose_msg.pose.orientation.w = 1.0;
+          pose_msg.pose.orientation.x = 0.0;
+          pose_msg.pose.orientation.y = 0.0;
+          pose_msg.pose.orientation.z = 0.0;
+
+          traj_path_msg_.header.stamp = pose_msg.header.stamp;
+          traj_path_msg_.poses.push_back(pose_msg);
+          if (traj_path_msg_.poses.size() > traj_max_points_)
+          {
+            traj_path_msg_.poses.erase(traj_path_msg_.poses.begin());
+          }
+
+          traj_pose_pub_.publish(pose_msg);
+          traj_path_pub_.publish(traj_path_msg_);
+        }
+
       // Compute control torque
       Vector6d tau;
       tau.setZero();
-
+      
+      Vector3d xdot_current = getEndEffectorVelocity(state_adj.q, state_adj.qp);
+      std_msgs::Float32MultiArray x_msg;
+      x_msg.data = {static_cast<float>(xdot_current(0)), 
+                    static_cast<float>(xdot_current(1)), 
+                    static_cast<float>(xdot_current(2))};
+      cartesian_pub_.publish(x_msg);
       if (control_space_ == ControlSpace::JOINT)
       {
-        tau = jointSpaceController(state, q_des, qdot_des, qddot_des, dt);
+        tau = jointSpaceController(state_adj, q_des, qdot_des, qddot_des, dt);
+        X_ = getEndEffectorPosition(q_);
       }
       else // CARTESIAN
       {
-        Vector3d xdot_current = getEndEffectorVelocity(state.q, state.qp);
+        Vector3d xdot_current = getEndEffectorVelocity(state_adj.q, state_adj.qp);
         
         // DEBUG: Log x_des to verify it's not zero
         ROS_INFO_STREAM_THROTTLE(0.5, "[CART] x_des=" << x_des.transpose() 
                                  << " X_=" << X_.transpose()
                                  << " delta=" << (X_ - x_des).transpose());
-        
-        tau = cartesianSpaceController(state, X_, xdot_current, x_des, xdot_des, xddot_des, dt);
+        X_ = getEndEffectorPosition(q_);
+        tau = cartesianSpaceController(state_adj, X_, xdot_current, x_des, xdot_des, xddot_des, dt);
       }
 
       // Publish debug data
@@ -246,24 +308,26 @@ namespace tum_ics_ur_robot_lli
       msg.time = time.tD();
       for (int i = 0; i < STD_DOF; i++)
       {
-        msg.q[i] = state.q(i);
-        msg.qp[i] = state.qp(i);
-        msg.qpp[i] = state.qpp(i);
+        msg.q[i] = state_adj.q(i);
+        msg.qp[i] = state_adj.qp(i);
+        msg.qpp[i] = state_adj.qpp(i);
         msg.qd[i] = q_des(i);
         msg.qpd[i] = qdot_des(i);
-        msg.Dq[i] = state.q(i) - q_des(i);
-        msg.Dqp[i] = state.qp(i) - qdot_des(i);
+        msg.Dq[i] = state_adj.q(i) - q_des(i);
+        msg.Dqp[i] = state_adj.qp(i) - qdot_des(i);
         msg.torques[i] = tau(i);
       }
       control_data_pub_.publish(msg);
 
       return tau;
     }
+
     bool OperationalSpaceController6DOF::stop()
     {
       ROS_WARN_STREAM("OperationalSpaceController6DOF::stop");
       return true;
     }
+
     void OperationalSpaceController6DOF::updateStateMachine(double t_elapsed)
     {
       State new_state = current_state_;
@@ -284,7 +348,7 @@ namespace tum_ics_ur_robot_lli
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        last_X_ = X_;
+        //last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ + t_LINEAR_ && 
                current_state_ == State::LINEAR)
@@ -293,16 +357,16 @@ namespace tum_ics_ur_robot_lli
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        last_X_ = X_;
+        //last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ && current_state_ == State::INIT)
       {
         new_state = State::LINEAR;
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = t_elapsed + t0_;
-        //last_t_ = ros::Time::now().toSec();
+        last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        last_X_ = X_;
+        //last_X_ = X_;
       }
 
       // If state changed, update transition variables
@@ -318,9 +382,21 @@ namespace tum_ics_ur_robot_lli
           // orbital_center_ is offset from the current Cartesian position
           // In Python: c = self.linear_start_pose (which is where LINEAR ends)
           // The circle is centered such that the initial point is on the circle
-          orbital_center_ = X_;  // Start circle from current position
-          orbital_center_(0) -= circle_radius_;  // Offset so we start at angle=0 on the circle
-          ROS_INFO_STREAM("Computed orbital_center_: " << orbital_center_.transpose());
+          // orbital_center_ = X_;  // Start circle from current position
+          // //orbital_center_ << 0.5, 0.0, 0.1; // Override with fixed center for testing
+          // orbital_center_(0) -= circle_radius_;  // Offset so we start at angle=0 on the circle
+          // ROS_INFO_STREAM("Computed orbital_center_: " << orbital_center_.transpose());
+          
+          ROS_WARN_STREAM("[TRANSITION LINEAR→TRACK_SLOW]");
+          ROS_WARN_STREAM("  Current X_: " << X_.transpose());
+          ROS_WARN_STREAM("  orbital_center_ BEFORE: " << orbital_center_.transpose());
+          
+          orbital_center_ = X_;
+          orbital_center_(0) -= circle_radius_;
+          
+          ROS_WARN_STREAM("  orbital_center_ AFTER: " << orbital_center_.transpose());
+          ROS_WARN_STREAM("  last_X_: " << last_X_.transpose());
+          ROS_WARN_STREAM("  Z offset captured: " << orbital_center_(2));
         }
         
         current_state_ = new_state;
@@ -328,7 +404,7 @@ namespace tum_ics_ur_robot_lli
         // We need to store the controller time at transition, not wall clock time
         last_t_ = t_elapsed + t0_;  // Convert back to absolute controller time
         // last_q_ = q_;
-        // last_X_ = X_;
+        last_X_ = X_;
       }
     }
     void OperationalSpaceController6DOF::generateTrajectory(double t,
@@ -344,6 +420,7 @@ namespace tum_ics_ur_robot_lli
 
       // Get track position in Cartesian space (compute FK for start_track_pose_)
       Vector3d track_pos_cartesian = getEndEffectorPosition(start_track_pose_);
+      track_pos_cartesian << -0.65, 0.0, 0.2; // Override with fixed position for testing
 
       double omega = 2.0 * M_PI / t_TRACK_SLOW_;
       double omega_z = omega * 15.0;
@@ -355,6 +432,7 @@ namespace tum_ics_ur_robot_lli
       omega_fast *= 4.0;
       omega_z_fast *= 4.0;
 
+      // amplitude seems not been used
       Vector3d amplitude;
       amplitude << track_pos_cartesian(0), track_pos_cartesian(0), 0.05;
 
@@ -367,19 +445,26 @@ namespace tum_ics_ur_robot_lli
       ROS_INFO_STREAM_THROTTLE(0.5, "[TRAJ] State=" << static_cast<int>(current_state_) 
                                << " t=" << t << " last_t_=" << last_t_ << " offset=" << offset
                                << " last_X_=" << last_X_.transpose()
-                               << " track_pos=" << track_pos_cartesian.transpose());
+                               << " track_pos=" << track_pos_cartesian.transpose()
+                              << "time offset" << offset);
 
       switch (current_state_)
       {
       case State::INIT:
         // Linear interpolation to non-singular pose in joint space
-        q_des = (non_singular_pose_ / t_INIT_) * offset;
+        q_des = q0_ + ((non_singular_pose_ - q0_) / t_INIT_) * offset;
         break;
 
       case State::LINEAR:
+      {
         // Linear interpolation in Cartesian space to tracking start position
         x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
+
+        // NOTE: adding xdot_des here didnt change anything?
+        xdot_des = (track_pos_cartesian - last_X_) / t_LINEAR_;
         break;
+      }
+      //ROS_INFO_STREAM_THROTTLE(0.5, "track_pos_cartesian - last_X_) / t_LINEAR_" << ((track_pos_cartesian - last_X_) / t_LINEAR_));
 
       case State::TRACK_SLOW:
       {
@@ -393,11 +478,14 @@ namespace tum_ics_ur_robot_lli
         // So orbital_center_ was set to last_X_ - [radius, 0, 0] in updateStateMachine
         x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
         x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
-        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
+        //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
+        x_des(2) = orbital_center_(2);
 
+        // totally removing x_dot_des makes no difference, robot still occilates in z direction
         xdot_des(0) = -circle_radius_ * omega * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega * std::cos(theta);
-        xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
+        //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
+        xdot_des(2) = 0;
         break;
       }
 
@@ -408,11 +496,13 @@ namespace tum_ics_ur_robot_lli
         
         x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
         x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
-        x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z_fast * theta);
+        //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z_fast * theta);
+        x_des(2) = orbital_center_(2);
 
         xdot_des(0) = -circle_radius_ * omega_fast * std::sin(theta);
         xdot_des(1) = circle_radius_ * omega_fast * std::cos(theta);
-        xdot_des(2) = vertical_amplitude_ * omega_z_fast * std::cos(omega_z_fast * theta);
+        //xdot_des(2) = vertical_amplitude_ * omega_z_fast * std::cos(omega_z_fast * theta);
+        xdot_des(2) = 0;
         break;
       }
 
@@ -429,15 +519,21 @@ namespace tum_ics_ur_robot_lli
                                                                    const Vector6d &qddot_des,
                                                                    double dt)
     {
+
+      // std_msgs::Float32MultiArray x_des_msg;
+      // x_des_msg.data = {static_cast<float>(q_des(0)), 
+      //                   static_cast<float>(q_des(1)), 
+      //                   static_cast<float>(q_des(2))};
+      // joint_states_des_pub_.publish(x_des_msg);
       Vector6d tau;
       tau.setZero();
-
+      Eigen::Matrix<double, 6, 6> Kp = (10 * Eigen::Matrix<double, 6, 6>::Identity());
       // Errors
       Vector6d delta_q = state.q - q_des;
-      Vector6d delta_qdot = state.qp - qdot_des;
+      Vector6d delta_qdot = qdot_des - Kp * delta_q;
 
       // Reference velocity with proportional term
-      Vector6d qrdot = qdot_des - Kreg_PD_ * delta_q / 20.0; // Normalize by Kreg scale
+      Vector6d qrdot = qdot_des - Kp * delta_q; // Normalize by Kreg scale
 
       // Sliding variable
       Vector6d S_q = state.qp - qrdot;
@@ -445,7 +541,6 @@ namespace tum_ics_ur_robot_lli
       // Simple PD control in joint space (can be extended with regressor-based adaptive control)
       // tau = -Kd * S_q approximates the adaptive control law
       tau = -Kreg_PD_ * S_q;
-
       return tau;
     }
     Vector6d OperationalSpaceController6DOF::cartesianSpaceController(const JointState &state,
@@ -482,12 +577,14 @@ namespace tum_ics_ur_robot_lli
       // ======================================================================
       Vector3d x_des_modified = x_des;
       Vector3d xdot_des_modified = xdot_des;
+      Vector3d xddot_des_modified = xddot_des;
 
       if (use_admittance_ && admittance_filter_)
       {
         // Get admittance offset: x_a from M*x_ddot + D*x_dot + K*x = F_ext - F_des
         Vector3d x_offset = admittance_filter_->update(dt);
         Vector3d xdot_offset = admittance_filter_->getVelocityOffset();
+        Vector3d xddot_offset = admittance_filter_->getAccelerationOffset();
 
         // Modify desired trajectory with admittance offset
         x_des_modified = x_des + x_offset;
@@ -505,8 +602,16 @@ namespace tum_ics_ur_robot_lli
           static_cast<float>(F_ext(2))
         };
         admittance_pub_.publish(adm_msg);
+        
       }
-
+      
+      
+      ROS_INFO_STREAM_THROTTLE(0.5,  "[CART CTRL] x_des=" << x_des.transpose()
+                                  << " xdot_des=" << xdot_des.transpose()
+                                  <<  " x_des_modified=" << x_des_modified.transpose() 
+                                  << " xdot_des_modified=" << xdot_des_modified.transpose() 
+                                  << " x_current=" << x_current.transpose() 
+                                  << " xdot_current=" << xdot_current.transpose());
       // Cartesian errors (use modified desired if admittance is enabled)
       Vector3d delta_x = x_current - x_des_modified;
       // ROS_WARN_STREAM("delta_x: " << delta_x.transpose());
@@ -517,72 +622,81 @@ namespace tum_ics_ur_robot_lli
 
       // Get full Jacobian and extract translational part (rows 0-2)
       Eigen::Matrix<double, 6, 6> J_full = computeJacobian(state.q);
-      Eigen::Matrix<double, 3, 6> J_ee = J_full.block<3, 6>(0, 0);  // Translational Jacobian
+      // NOTE: Robot gets unstable, if we use (3,0) -> hence (3,0) is the rotational part and (0,0) is the translational part of the Jacobian
+      Eigen::Matrix<double, 3, 3> J_ee = J_full.block<3, 3>(0, 0);  // Translational Jacobian
 
       // Compute pseudoinverse of Jacobian
       Eigen::MatrixXd J_pinv = pseudoInverse(J_ee);
 
       Eigen::Matrix<double,6,6> Jdot_ee_w  = computeJacobianDotTranslational(state.q, state.qp);
-      Eigen::Matrix<double, 3, 6> Jdot_ee_w_translation = Jdot_ee_w.block<3, 6>(0, 0); // Get translational part of Jacobian derivative in world frame
-      //Eigen::Matrix<double, 3, 6> Jdot_e_w_linear = Jdot_ee_w.block<3, 6>(3, 0); // Extract translational part of Jacobian derivative
+      Eigen::Matrix<double, 3, 3> Jdot_ee_w_translation = Jdot_ee_w.block<3, 3>(0, 0); // Get translational part of Jacobian derivative in world frame
       //PD controller seems to be correctly
+      Eigen::Matrix<double, 6, 6> selectionMatrix = Matrix6d::Zero();
+      selectionMatrix << 1, 0, 0, 0, 0, 0,
+                          0, 1, 0, 0, 0, 0,
+                          0, 0, 1, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0;
       if (controller_type_ == ControllerType::PD)
       {
-        // Reference Cartesian velocity
-        Vector3d xrdot = xdot_des - Kp_PD_ * delta_x;
-        Vector3d xrddot = xddot_des - Kp_PD_ * delta_xdot;
-        // Map to joint space
-        Vector6d qrdot = J_pinv * xrdot;
-        Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
+      Vector6d qrdot, qrddot;
+      qrdot.setZero();
+      qrddot.setZero();
+      // Reference Cartesian velocityKreg_PD_cart_
+      Vector3d xrdot = xdot_des_modified - Kp_PD_ * delta_x;
+      Vector3d xrddot = xddot_des_modified - delta_xdot;//Kp_PD_ * delta_xdot;
+      // Map to joint space
+      qrdot.head(3) = J_pinv * xrdot;
+      qrddot.head(3) = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot.head(3)); // Jdot_ee is the time derivative of the Jacobian 
 
-        // Sliding variable in joint space
-        Vector6d S_q = state.qp - qrdot;
+      // Sliding variable in joint space
+      Vector3d S_q = state.qp.head(3) - qrdot.head(3);
+      
+      std_msgs::Float32MultiArray delta_msg;
+      delta_msg.data = {static_cast<float>(xrdot(0)), 
+                        static_cast<float>(xrdot(1)), 
+                        static_cast<float>(xrdot(2))};
+      steady_state_error_pub_.publish(delta_msg);
 
+      std_msgs::Float32MultiArray x_des_msg;
+      x_des_msg.data = {static_cast<float>(x_des(0)),
+                        static_cast<float>(x_des(1)),
+                        static_cast<float>(x_des(2))};
+      joint_states_des_pub_.publish(x_des_msg);
         //TODO: implement missing parts aka ro, computeRegressor and
         //Vector6d Yr = computeRegressor(state.q, state.qp, qrdot, xddot_des); // Compute regressor based on current state and desired acceleration
         //Vector6d theta -= (ro * (Yr.transpose() * S_q)) * dt; // Update adaptive parameters using gradient descent
-        Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
+        //Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
         // Simple PD control (can be extended with adaptive control)
-        tau = -Kreg_PD_ * S_q + Yr_theta;
-
-
-        
-       
+        tau.head(3) = -Kreg_PD_cart_ * S_q ;//+ Yr_theta;
+        tau(3) = jointControl(state.q, 50);
+        tau(4) = (M_PI/2 - state.q(4)) * 10;
+        tau += selectionMatrix * computeReferenceTorques(state.q, state.qp, qrdot, qrddot); // Add feedforward term based on desired trajectory
       }
       else if (controller_type_ == ControllerType::PID)
       {
         
-        //TODO: implement correct version of PID Controller 
-        // PID in Cartesian space
-        Vector3d xrdot = xdot_des - Kp_PID_ * delta_x - Ki_PID_ * integral_error_acc_;
-        Vector3d xrddot = xddot_des - Kp_PID_ * delta_xdot - Ki_PID_ * delta_x;
-        Vector6d qrdot = J_pinv * xrdot;
-        // TODO: implement Jdot_ee helper function that calculates the time derivative of the Jacobian based on current q and qp
-        Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
-        Vector6d S_q = state.qp - qrdot;
-        //TODO: add helper function that calculate M, C, G and maybe also regressor Y from model.zip files
-        //Yr_theta = M * qrddot + C * qrdot + G; // Regressor-based adaptive control law (simplified)
-        Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
-        tau = -Kd_PID_(0, 0) * S_q + Yr_theta;  // Use scalar Kd for simplicity       
+        // //TODO: implement correct version of PID Controller 
+        // // PID in Cartesian space
+        // Vector3d xrdot = xdot_des - Kp_PID_ * delta_x - Ki_PID_ * integral_error_acc_;
+        // Vector3d xrddot = xddot_des - Kp_PID_ * delta_xdot - Ki_PID_ * delta_x;
+        // Vector6d qrdot = J_pinv * xrdot;
+        // // TODO: implement Jdot_ee helper function that calculates the time derivative of the Jacobian based on current q and qp
+        // Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
+        // Vector6d S_q = state.qp - qrdot;
+        // //TODO: add helper function that calculate M, C, G and maybe also regressor Y from model.zip files
+        // //Yr_theta = M * qrddot + C * qrdot + G; // Regressor-based adaptive control law (simplified)
+        // Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot);
+        // tau = -Kd_PID_(0, 0) * S_q + Yr_theta;  // Use scalar Kd for simplicity
       }
 
       // Publish Cartesian tracking data
-      std_msgs::Float32MultiArray delta_msg;
-      delta_msg.data = {static_cast<float>(delta_x(0)), 
-                        static_cast<float>(delta_x(1)), 
-                        static_cast<float>(delta_x(2))};
-      steady_state_error_pub_.publish(delta_msg);
-
-      std_msgs::Float32MultiArray x_des_msg;
-      x_des_msg.data = {static_cast<float>(x_des(0)), 
-                        static_cast<float>(x_des(1)), 
-                        static_cast<float>(x_des(2))};
-      joint_states_des_pub_.publish(x_des_msg);
 
       std_msgs::Float32MultiArray x_msg;
-      x_msg.data = {static_cast<float>(x_current(0)), 
-                    static_cast<float>(x_current(1)), 
-                    static_cast<float>(x_current(2))};
+      x_msg.data = {static_cast<float>(xdot_current(0)), 
+                    static_cast<float>(xdot_current(1)), 
+                    static_cast<float>(xdot_current(2))};
       cartesian_pub_.publish(x_msg);
 
       return tau;
@@ -685,6 +799,28 @@ namespace tum_ics_ur_robot_lli
       Eigen::Matrix4d T_ef_w = T_0_w * T_ef_0; 
       return T_ef_w.block<3,1>(0,3);
     }
+
+    void OperationalSpaceController6DOF::publishTF_raw(const std::string& parent,
+                   const std::string& child,
+                   double x, double y, double z)
+    {
+        geometry_msgs::TransformStamped t;
+
+        t.header.stamp = ros::Time::now();
+        t.header.frame_id = parent;
+        t.child_frame_id = child;
+
+        t.transform.translation.x = x;
+        t.transform.translation.y = y;
+        t.transform.translation.z = z;
+
+        t.transform.rotation.w = 1.0; // identity rotation
+
+        tf2_msgs::TFMessage msg;
+        msg.transforms.push_back(t);
+        tf_pub_.publish(msg);
+    }
+
     Vector3d OperationalSpaceController6DOF::getEndEffectorVelocity(const Vector6d &q, const Vector6d &qp)
     {
 
@@ -697,8 +833,8 @@ namespace tum_ics_ur_robot_lli
         return V_ee_w[3:]
       */
       Eigen::Matrix<double, 6, 6> J = computeJacobian(q);
-      Eigen:Matrix<double, 6, 1> V_ee_w = J * qp; // End-effector twist in world frame
-      return V_ee_w.block<3, 1>(3, 0); //
+      Eigen::Matrix<double, 6, 1> V_ee_w = J * qp; // End-effector twist in world frame
+      return V_ee_w.block<3, 1>(0, 0); // 0,0 for linear velocity -> had here 3,0 before!!!
 
       /*
       // xdot = J * qdot (linear velocity part only)
@@ -721,5 +857,65 @@ namespace tum_ics_ur_robot_lli
       return Yr_theta;
     }
 
+    Vector6d OperationalSpaceController6DOF::computeReferenceTorques(const Vector6d &q, const Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr)
+    {
+      return model_.inertiaMatrix(q) * qddotr + model_.centripetalMatrix(q, qdot) * qdotr + model_.gravityVector(q);
+    }
+    double OperationalSpaceController6DOF::jointControl(const Vector6d &q, double gain) 
+    {
+      Vector3d z;
+      Vector3d x;
+      z.setZero();
+      x.setZero();
+      x << 1, 0, 0;
+      z << 0, 0, 1;
+      double dot = z.transpose() * model_.T_5_w_inv(q).matrix().block<3, 3>(0, 0) * x;
+      return -dot * gain;
+    }
+    
+    // verification function for jacobian cal
+    /*python version:
+      # =========================================================
+    # Debug Jacobian checker (optional, runs once)
+    # =========================================================
+    def _debug_jacobian_full(self, q):
+        eps = 1e-6
+        n = self.nq
+
+        J6 = np.array(self.model.J_ee_w_fn(*q.flatten()), dtype=float)
+        J_top = J6[0:3, :]
+        J_bot = J6[3:6, :]
+
+        J_num = np.zeros((3, n))
+        x0 = self._fk_pos(q)
+        for i in range(n):
+            q_p = q.copy()
+            q_m = q.copy()
+            q_p[i, 0] += eps
+            q_m[i, 0] -= eps
+            x_p = self._fk_pos(q_p)
+            x_m = self._fk_pos(q_m)
+            J_num[:, i] = ((x_p - x_m) / (2.0 * eps)).flatten()
+
+        rospy.logwarn("====== Jacobian FULL check (position) ======")
+        rospy.logwarn(f"J_num (pos, from FK) =\n{J_num}")
+        rospy.logwarn(f"J6 top(0:3) =\n{J_top}")
+        rospy.logwarn(f"J6 bot(3:6) =\n{J_bot}")
+
+        for blk_name, Jblk in [("top(0:3)", J_top), ("bot(3:6)", J_bot)]:
+            rospy.logwarn(f"---- Matching columns against {blk_name} ----")
+            for i in range(n):
+                errs = [np.linalg.norm(J_num[:, i] - Jblk[:, j]) for j in range(n)]
+                j_best = int(np.argmin(errs))
+                rospy.logwarn(
+                    f"joint {i}: best match col {j_best} err={errs[j_best]:.4e} "
+                    f"all={['%.2e' % e for e in errs]}"
+                )
+
+        if hasattr(self.model, "Jp_ee_w_fk_fn"):
+            J_fk = np.array(self.model.Jp_ee_w_fk_fn(*q.flatten()), dtype=float)
+            rospy.logwarn(f"Jp_fk (d FK pos / d q) =\n{J_fk}")
+            rospy.logwarn(f"||J_num - Jp_fk|| = {np.linalg.norm(J_num - J_fk):.4e}")*/
+      //cpp version
   } // namespace RobotControllers
 } // namespace tum_ics_ur_robot_lli
