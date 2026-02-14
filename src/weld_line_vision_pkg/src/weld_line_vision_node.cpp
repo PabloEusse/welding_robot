@@ -1,6 +1,10 @@
 #include <ros/ros.h>
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <geometry_msgs/TransformStamped.h>
 
 #include <sensor_msgs/Image.h>
 #include <nav_msgs/Path.h>
@@ -8,8 +12,9 @@
 #include <visualization_msgs/Marker.h>
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/ximgproc.hpp>   
+#include <opencv2/ximgproc.hpp>
 #include <opencv2/aruco.hpp>      
+#include <sstream>
 
 class TrajectoryGenerator
 {
@@ -42,6 +47,13 @@ public:
     nh_.param<int>("id_bl", id_bl_, 2);   // ID Bottom Left
     nh_.param<int>("id_br", id_br_, 3);   // ID Bottom Right
 
+    // Robot base markers (10cm markers)
+    nh_.param<int>("id_robot_top", id_robot_top_, 7);       // ID 7 (top marker)
+    nh_.param<int>("id_robot_bottom", id_robot_bottom_, 17); // ID 17 (bottom marker)
+    nh_.param<double>("robot_marker_size", robot_marker_size_, 0.10); // 10cm
+    nh_.param<double>("robot_marker_distance", robot_marker_distance_, 0.20); // Distance between robot markers
+    nh_.param<std::string>("robot_base_frame", robot_base_frame_, "robot_base_link");
+
     // HSV values for the chosen color (cyan blue).
     nh_.param<int>("h_low",  h_low_,  75);
     nh_.param<int>("h_high", h_high_, 130);
@@ -59,6 +71,7 @@ public:
 
     // Sampling along skeleton
     nh_.param<int>("sample_step_px", sample_step_px_, 6);
+    nh_.param<bool>("rotate_image_90_cw", rotate_image_90_cw_, false);
 
     // Subscribers 
     img_sub_  = it_.subscribe(image_topic_, 1, &TrajectoryGenerator::imgCallback, this);
@@ -66,6 +79,7 @@ public:
     // Publishers
     path_pub_   = nh_.advertise<nav_msgs::Path>("weld_path", 1);
     marker_pub_ = nh_.advertise<visualization_msgs::Marker>("weld_points_marker", 1);
+    workspace_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("workspace_marker", 1);
 
     dbg_pub_  = it_.advertise("debug_image", 1);    // Bounding box for the detected object (for debugging)
     mask_pub_ = it_.advertise("debug_mask", 1);     // Mask or the detected object (for debugging)
@@ -73,6 +87,12 @@ public:
 
     dict_ = cv::aruco::getPredefinedDictionary((cv::aruco::PREDEFINED_DICTIONARY_NAME)aruco_dict_id_);
     params_ = cv::aruco::DetectorParameters::create();
+    params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+    params_->adaptiveThreshWinSizeMin = 3;
+    params_->adaptiveThreshWinSizeMax = 53;
+    params_->adaptiveThreshWinSizeStep = 4;
+    params_->minMarkerPerimeterRate = 0.01;
+    params_->minDistanceToBorder = 3;
 
     ROS_INFO("Trajectory Generator initialized. Subscribing to: %s", image_topic_.c_str());
     //ROS_INFO("Paper size: %.3f x %.3f m, frame_id=%s", paper_w_m_, paper_h_m_, frame_id_.c_str());
@@ -182,6 +202,17 @@ private:
     return c;
   }
 
+  static std::string idsToString(const std::vector<int>& ids)
+  {
+    if (ids.empty()) return "none";
+    std::ostringstream oss;
+    for (size_t i = 0; i < ids.size(); ++i) {
+      if (i > 0) oss << ",";
+      oss << ids[i];
+    }
+    return oss.str();
+  }
+
   std::vector<cv::Point2f> computeAuroCenters()
   {
     std::vector<cv::Point2f> paper_pts;
@@ -237,8 +268,8 @@ private:
       findCenterById(id_br_, c_br);
 
     if (!ok) {
-      ROS_WARN_THROTTLE(1.0, "Missing ArUco corners. Need ids TL=%d TR=%d BL=%d BR=%d",
-                        id_tl_, id_tr_, id_bl_, id_br_);
+      ROS_WARN_THROTTLE(1.0, "Missing ArUco corners. Need ids TL=%d TR=%d BL=%d BR=%d, detected=[%s], dict=%d",
+                        id_tl_, id_tr_, id_bl_, id_br_, idsToString(ids).c_str(), aruco_dict_id_);
       return false;
     }
 
@@ -267,24 +298,174 @@ private:
     return true;
   }
 
+  void publishWorkspaceMarker(const ros::Time& stamp)
+  {
+    visualization_msgs::Marker ws_marker;
+    ws_marker.header.frame_id = frame_id_;
+    ws_marker.header.stamp = stamp;
+    ws_marker.ns = "workspace";
+    ws_marker.id = 0;
+    ws_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    ws_marker.action = visualization_msgs::Marker::ADD;
+    ws_marker.pose.orientation.w = 1.0;
+    ws_marker.scale.x = 0.003; // Line width
+    ws_marker.color.r = 0.0;
+    ws_marker.color.g = 1.0;
+    ws_marker.color.b = 0.0;
+    ws_marker.color.a = 0.8;
+
+    // Workspace corners
+    geometry_msgs::Point p1, p2, p3, p4;
+    p1.x = 0.0; p1.y = 0.0; p1.z = 0.0;
+    p2.x = paper_w_m_; p2.y = 0.0; p2.z = 0.0;
+    p3.x = paper_w_m_; p3.y = paper_h_m_; p3.z = 0.0;
+    p4.x = 0.0; p4.y = paper_h_m_; p4.z = 0.0;
+
+    ws_marker.points.push_back(p1);
+    ws_marker.points.push_back(p2);
+    ws_marker.points.push_back(p3);
+    ws_marker.points.push_back(p4);
+    ws_marker.points.push_back(p1); // Close the loop
+
+    workspace_marker_pub_.publish(ws_marker);
+  }
+
+  bool computeRobotBaseTransform(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners,
+      const cv::Mat& H_img_to_paper,
+      const ros::Time& stamp)
+  {
+    // Find robot markers (7=top, 17=bottom)
+    auto findCenterById = [&](int target_id, cv::Point2f& out_center) -> bool {
+      for (size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i] == target_id) {
+          out_center = markerCenter(corners[i]);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    cv::Point2f c_top, c_bottom;
+    bool ok = findCenterById(id_robot_top_, c_top) &&
+              findCenterById(id_robot_bottom_, c_bottom);
+
+    if (!ok) {
+      ROS_WARN_THROTTLE(2.0, "Robot markers not detected. Need IDs %d (top) and %d (bottom)",
+                        id_robot_top_, id_robot_bottom_);
+      return false;
+    }
+
+    // Transform marker centers from pixels to workspace coordinates
+    std::vector<cv::Point2f> robot_centers_px = {c_top, c_bottom};
+    std::vector<cv::Point2f> robot_centers_ws;
+    cv::perspectiveTransform(robot_centers_px, robot_centers_ws, H_img_to_paper);
+
+    cv::Point2f marker7_ws = robot_centers_ws[0];   // ID 7 (origin)
+    cv::Point2f marker17_ws = robot_centers_ws[1];  // ID 17 (heading reference)
+
+    // Robot base origin is at marker 7 position
+    double robot_x = marker7_ws.x;
+    double robot_y = marker7_ws.y;
+    double robot_z = 0.0;  // On the workspace plane
+
+    // Compute robot base frame orientation:
+    // Use marker 17 -> 7 as heading direction in the workspace plane.
+    // Keep robot Z axis aligned with workspace +Z so the robot stays upright in RViz.
+    double vec_x = marker7_ws.x - marker17_ws.x;
+    double vec_y = marker7_ws.y - marker17_ws.y;
+    double vec_norm = std::sqrt(vec_x*vec_x + vec_y*vec_y);
+
+    if (vec_norm < 1e-6) {
+      ROS_WARN_THROTTLE(2.0, "Markers 7 and 17 are too close!");
+      return false;
+    }
+
+    // Normalized heading vector (17→7) on workspace plane.
+    const double dir_x = vec_x / vec_norm;
+    const double dir_y = vec_y / vec_norm;
+
+    // Robot axes in workspace coordinates:
+    // X (forward): heading (17->7)
+    // Y (left): 90deg CCW from heading
+    // Z (up): workspace +Z
+    const double x_x = dir_x;
+    const double x_y = dir_y;
+    const double y_x = -dir_y;
+    const double y_y = dir_x;
+
+    // Rotation matrix with columns [X_robot | Y_robot | Z_robot]
+    tf2::Matrix3x3 rot_matrix(
+      x_x, y_x, 0.0,
+      x_y, y_y, 0.0,
+      0.0, 0.0, 1.0
+    );
+
+    // Convert rotation matrix to quaternion
+    tf2::Quaternion q;
+    rot_matrix.getRotation(q);
+
+    // Create and publish TF transform
+    geometry_msgs::TransformStamped transform_stamped;
+    transform_stamped.header.stamp = stamp;
+    transform_stamped.header.frame_id = frame_id_;  // workspace_frame
+    transform_stamped.child_frame_id = robot_base_frame_;
+
+    transform_stamped.transform.translation.x = robot_x;
+    transform_stamped.transform.translation.y = robot_y;
+    transform_stamped.transform.translation.z = robot_z;
+    transform_stamped.transform.rotation.x = q.x();
+    transform_stamped.transform.rotation.y = q.y();
+    transform_stamped.transform.rotation.z = q.z();
+    transform_stamped.transform.rotation.w = q.w();
+
+    tf_broadcaster_.sendTransform(transform_stamped);
+
+    // Log robot base info
+    double roll, pitch, yaw_out;
+    rot_matrix.getRPY(roll, pitch, yaw_out);
+    ROS_INFO_THROTTLE(5.0, "Robot base at marker 7: pos=(%.3f, %.3f, %.3f)m, heading(17->7)=%.2f deg, rpy=(%.2f, %.2f, %.2f) deg",
+                      robot_x, robot_y, robot_z,
+                      std::atan2(dir_y, dir_x) * 180.0 / M_PI,
+                      roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw_out * 180.0 / M_PI);
+
+    return true;
+  }
+
   void imgCallback(const sensor_msgs::ImageConstPtr& msg)
   {
     cv::Mat bgr_full;
     try {
-      bgr_full = cv_bridge::toCvShare(msg, "bgr8")->image;
+      bgr_full = cv_bridge::toCvCopy(msg, "bgr8")->image;
     } catch (const std::exception& e) {
       ROS_WARN("cv_bridge: %s", e.what());
       return;
     }
 
+    if (rotate_image_90_cw_) {
+      cv::rotate(bgr_full, bgr_full, cv::ROTATE_90_CLOCKWISE);
+    }
+
+    // Detect all ArUco markers
+    std::vector<int> ids;
+    std::vector<std::vector<cv::Point2f>> corners;
+    cv::aruco::detectMarkers(bgr_full, dict_, corners, ids, params_);
+
+    // Keep workspace boundary visible in RViz even when ArUco is not detected yet.
+    publishWorkspaceMarker(msg->header.stamp);
+
     // Compute homography (pixel -> paper meters)
     cv::Mat H;
     cv::Mat dbg_aruco;
     if (!computeHomographyFromArucoCenters(bgr_full, H, dbg_aruco)) {
-      // Only publish marker detecion
+      // Only publish marker detection
       dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
       return;
     }
+
+    // Compute and publish robot base transform from markers 7 and 17
+    computeRobotBaseTransform(ids, corners, H, msg->header.stamp);
 
     // ROI for color processing (optional)
     cv::Rect roi(0, 0, bgr_full.cols, bgr_full.rows);
@@ -405,12 +586,16 @@ private:
 
   ros::Publisher path_pub_;
   ros::Publisher marker_pub_;
+  ros::Publisher workspace_marker_pub_;
 
   image_transport::Publisher dbg_pub_;
   image_transport::Publisher mask_pub_;
   image_transport::Publisher skel_pub_;
 
+  tf2_ros::TransformBroadcaster tf_broadcaster_;
+
   std::string image_topic_, frame_id_;
+  std::string robot_base_frame_;
 
 
   // paper magnitudes
@@ -435,6 +620,12 @@ private:
   cv::Ptr<cv::aruco::Dictionary> dict_;
   cv::Ptr<cv::aruco::DetectorParameters> params_;
 
+  // Robot base markers
+  int id_robot_top_ = 7;
+  int id_robot_bottom_ = 17;
+  double robot_marker_size_ = 0.10;
+  double robot_marker_distance_ = 0.20;
+
   // hsv values
   int h_low_ = 75, h_high_ = 130;
   int s_low_ = 20, v_low_ = 40;
@@ -447,6 +638,9 @@ private:
 
   // sampling step
   int sample_step_px_ = 6;
+
+  // image orientation
+  bool rotate_image_90_cw_ = false;
 };
 
 int main(int argc, char** argv)

@@ -5,6 +5,7 @@
   <arg name="pixel_format" default="yu12" />
   <arg name="framerate" default="30" />
   <arg name="io_method" default="read" />
+  <arg name="rotate_image_90_cw" default="true" />
 
   <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_camera"
         args="0 0 0 0 0 0 world camera_optical_frame" />
@@ -23,6 +24,7 @@
     <param name="image_topic" value="/droidcam/image_raw"/>
     <param name="info_topic" value="/droidcam/camera_info"/>
     <param name="frame_id" value="camera_optical_frame"/>
+    <param name="rotate_image_90_cw" value="$(arg rotate_image_90_cw)"/>
 
     <param name="h_low" value="85"/>
     <param name="h_high" value="115"/>
