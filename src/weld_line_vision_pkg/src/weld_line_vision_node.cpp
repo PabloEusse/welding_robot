@@ -14,6 +14,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/ximgproc.hpp>
 #include <opencv2/aruco.hpp>      
+#include <cmath>
 #include <sstream>
 
 class TrajectoryGenerator
@@ -100,6 +101,12 @@ public:
   }
 
 private:
+  bool isInsideWorkspace(double x, double y, double margin = 0.0) const
+  {
+    return (x >= -margin && x <= (paper_w_m_ + margin) &&
+            y >= -margin && y <= (paper_h_m_ + margin));
+  }
+
   static inline bool inBounds(int x, int y, int w, int h)
   {
     return (x >= 0 && y >= 0 && x < w && y < h);
@@ -298,6 +305,44 @@ private:
     return true;
   }
 
+  bool buildWorkspaceMaskInImage(
+      const cv::Mat& H_img_to_paper,
+      const cv::Size& image_size,
+      cv::Mat& workspace_mask,
+      std::vector<cv::Point>& workspace_poly) const
+  {
+    workspace_mask = cv::Mat::zeros(image_size, CV_8U);
+    workspace_poly.clear();
+
+    if (H_img_to_paper.empty()) return false;
+
+    cv::Mat H_paper_to_img = H_img_to_paper.inv();
+    if (H_paper_to_img.empty()) return false;
+
+    std::vector<cv::Point2f> paper_corners = {
+      cv::Point2f(0.f, 0.f),
+      cv::Point2f(static_cast<float>(paper_w_m_), 0.f),
+      cv::Point2f(static_cast<float>(paper_w_m_), static_cast<float>(paper_h_m_)),
+      cv::Point2f(0.f, static_cast<float>(paper_h_m_))
+    };
+
+    std::vector<cv::Point2f> image_corners;
+    cv::perspectiveTransform(paper_corners, image_corners, H_paper_to_img);
+
+    workspace_poly.reserve(image_corners.size());
+    for (const auto& p : image_corners) {
+      if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+        return false;
+      }
+      workspace_poly.emplace_back(cv::Point(cvRound(p.x), cvRound(p.y)));
+    }
+
+    if (workspace_poly.size() != 4) return false;
+
+    cv::fillConvexPoly(workspace_mask, workspace_poly, cv::Scalar(255));
+    return true;
+  }
+
   void publishWorkspaceMarker(const ros::Time& stamp)
   {
     visualization_msgs::Marker ws_marker;
@@ -464,6 +509,17 @@ private:
       return;
     }
 
+    // Build a strict image mask for the calibrated workspace area.
+    cv::Mat workspace_mask_full;
+    std::vector<cv::Point> workspace_poly_img;
+    if (!buildWorkspaceMaskInImage(H, bgr_full.size(), workspace_mask_full, workspace_poly_img)) {
+      ROS_WARN_THROTTLE(1.0, "Failed to build workspace mask from ArUco homography.");
+      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      return;
+    }
+
+    cv::polylines(dbg_aruco, workspace_poly_img, true, cv::Scalar(255, 255, 0), 2);
+
     // Compute and publish robot base transform from markers 7 and 17
     computeRobotBaseTransform(ids, corners, H, msg->header.stamp);
 
@@ -473,6 +529,7 @@ private:
       roi = cv::Rect(roi_x_, roi_y_, roi_w_, roi_h_) & cv::Rect(0, 0, bgr_full.cols, bgr_full.rows);
     }
     cv::Mat bgr = bgr_full(roi);
+    cv::Mat workspace_mask_roi = workspace_mask_full(roi);
 
     // BGR -> HSV
     cv::Mat hsv;
@@ -484,6 +541,9 @@ private:
                 cv::Scalar(h_low_, s_low_, v_low_),
                 cv::Scalar(h_high_, 255, 255),
                 mask);
+
+    // Hard gate: only keep blue pixels that lie inside workspace (ArUco 0,1,2,3).
+    cv::bitwise_and(mask, workspace_mask_roi, mask);
 
     // Morphology
     int k = std::max(1, morph_ksize_);  // Make sure that the kernel size is positive
@@ -536,9 +596,15 @@ private:
     mk.color.a = 1.0;
     mk.color.b = 1.0;
 
+    int outside_workspace = 0;
     for (size_t i = 0; i < sampled_xy.size(); ++i) {
       const double X = sampled_xy[i].x;
       const double Y = sampled_xy[i].y;
+
+      if (!isInsideWorkspace(X, Y, 0.005)) {
+        outside_workspace++;
+        continue;
+      }
 
       geometry_msgs::PoseStamped ps;
       ps.header = path.header;
@@ -551,6 +617,18 @@ private:
       geometry_msgs::Point p;
       p.x = X; p.y = Y; p.z = 0.0;
       mk.points.push_back(p);
+    }
+
+    if (outside_workspace > 0) {
+      ROS_WARN_THROTTLE(2.0, "Filtered %d trajectory points outside workspace bounds", outside_workspace);
+    }
+
+    if (path.poses.size() < 2) {
+      ROS_WARN_THROTTLE(1.0, "No valid trajectory points inside workspace.");
+      path_pub_.publish(path);
+      marker_pub_.publish(mk);
+      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      return;
     }
 
     path_pub_.publish(path);
