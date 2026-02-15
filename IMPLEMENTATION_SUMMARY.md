@@ -9,6 +9,81 @@ Extended the `weld_line_vision_pkg` to:
 
 ---
 
+## Recent Meaningful Updates (Current Code)
+
+This section records only updates that are currently present in code (reverted experiments excluded).
+
+1. Camera-separated robot pose mode (PnP) is enabled by default.
+   - Parameter: `use_camera_separate_calibration` (default `true`)
+   - Code: `src/weld_line_vision_pkg/src/weld_line_vision_node.cpp`
+
+2. Camera intrinsics are consumed from `/droidcam/camera_info` and validated before PnP.
+   - Parameters: `camera_info_topic`, backward-compatible `info_topic`
+   - Launch support: `camera_info_url`
+
+3. Optional homography fallback for robot pose was added.
+   - Parameter: `allow_homography_fallback_for_robot_pose` (default `false`)
+
+4. Workspace and robot are both estimated in camera frame, then composed:
+   - `T_ws_base = inv(T_cam_ws) * T_cam_base`
+   - This is the active transform composition in `computeRobotBaseTransformFromCamera(...)`.
+
+5. When image rotation is enabled (`rotate_image_90_cw=true`), marker corners are unrotated back for camera-PnP consistency.
+   - Function: `unrotateCorners90CWToOriginal(...)`
+
+6. Trajectory extraction is hard-gated by workspace mask.
+   - Blue mask is ANDed with workspace polygon mask before skeletonization.
+   - This prevents outside-blue regions from becoming trajectory candidates.
+
+7. Workspace marker IDs are now launch-overrideable.
+   - Launch args: `id_tl`, `id_tr`, `id_bl`, `id_br`
+   - Useful for quick remapping without editing C++.
+
+8. Robot base lateral translation offset is supported for fine alignment.
+   - Parameter: `robot_base_y_offset_m`
+   - Applied as translation offset only (orientation unchanged by this parameter).
+
+9. ArUco-based intrinsics calibration utility was added.
+   - Script: `src/weld_line_vision_pkg/scripts/aruco_intrinsics_calibrator.py`
+   - Purpose: generate `droidcam.yaml` without checkerboard.
+   - OpenCV ArUco API compatibility handled for multiple versions.
+
+---
+
+## Controller Target Interface (Current)
+
+If you want to feed trajectory targets into a controller, this is the exact output format currently produced by `weld_line_vision`:
+
+1. Main trajectory topic
+   - Topic: `/weld_line_vision/weld_path`
+   - Type: `nav_msgs/Path`
+   - Frame: `workspace_frame` (from `frame_id` parameter)
+
+2. Per-point value format (`Path.poses[i]`)
+   - Type: `geometry_msgs/PoseStamped`
+   - `pose.position.x`: workspace X (meters)
+   - `pose.position.y`: workspace Y (meters)
+   - `pose.position.z`: always `0.0` (workspace plane)
+   - `pose.orientation`: identity (`w=1.0`, no orientation profile)
+
+3. Important behavior
+   - Points are sampled from detected skeleton in image order and transformed to workspace meters.
+   - If valid points are insufficient, an empty/short path may be published and should be ignored by controller side.
+   - No timing profile is included in `nav_msgs/Path` (controller/bridge must assign speed/time law).
+
+4. For controller integration
+   - First transform points from `workspace_frame` to the controller frame (typically `base_link`) via TF.
+   - Then pass either:
+     - Full waypoint list (`nav_msgs/Path`) to a trajectory planner, or
+     - Single-step target (`geometry_msgs/PoseStamped` / numeric vector) in your control loop.
+   - Keep tool orientation as a separate policy (because weld path currently contains position-only intent).
+
+5. Existing reference in this repo
+   - `src/trajectory_tracker/scripts/trajectory_publisher_node.py` republishes a path and emits one-point Cartesian target example:
+   - `Float64MultiArray [x, y, z, enabled]`
+
+---
+
 ## What Was Implemented
 
 ### 1. C++ Code Modifications (`weld_line_vision_node.cpp`)
