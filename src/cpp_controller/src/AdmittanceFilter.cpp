@@ -13,24 +13,24 @@ AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_to
   F_ext_.setZero();
   T_ext_.setZero();
   F_desired_.setZero();
-  //F_desired_ << 0.0, 0.0, 0.2;
+  F_desired_ << 0.0, 0.0, 3;
   x_.setZero();
   x_dot_.setZero();
   x_ddot_.setZero();
-
+  ROS_WARN_STREAM("axis modes");
   // Default admittance parameters (tuned for end effector drawing)
   // Z-axis: compliant for force control
   // X,Y: stiff (position control mode by default)
-  M_d_ << 5.0, 5.0, 5;    // Virtual mass [kg]
-  D_d_ << 1000.0, 1000.0, 900.0;  // Virtual damping [Ns/m] - with 60 = xddot_offset = 2.3683 at state transition, with 70 = 10^-6
-  K_d_ << 0.0, 0.0, 0.05;    // Virtual stiffness [N/m] - 0 for pure force tracking - activate for testing
+  M_d_ << 0.0, 0.0, 5;    // Virtual mass [kg]
+  D_d_ << 1000.0, 1000.0, 350.0;  // Virtual damping [Ns/m] - with 60 = xddot_offset = 2.3683 at state transition, with 70 = 10^-6
+  K_d_ << 5.0, 5.0, 15;    // Virtual stiffness [N/m] - 0 for pure force tracking - activate for testing
 
   // Default: X,Y position control, Z force control
   axis_modes_ = {AxisMode::POSITION, AxisMode::POSITION, AxisMode::FORCE};
-
+  setAxisMode(3, axis_modes_[3]);
   // Safety limits
-  x_max_ << 0.05, 0.05, 0.05;       // Max 5cm offset
-  x_dot_max_ << 0.1, 0.1, 0.1;      // Max 10cm/s velocity
+  x_max_ << 0.02, 0.02, 0.5;       // Max 5cm offset
+  x_dot_max_ << 0.1, 0.1, 0.5;      // Max 10cm/s velocity
 
   // Subscribe to FT sensor
   ft_sub_ = nh_.subscribe(ft_topic, 1, &AdmittanceFilter::ftSensorCallback, this);

@@ -95,7 +95,7 @@ namespace tum_ics_ur_robot_lli
       double t_TRACK_FAST_;
       double t0_;          // Start time
       double last_t_;      // Time at last state transition
-
+      float dt_acc_;
       // State variables
       Vector6d q_;         // Current joint position
       Vector3d X_;         // Current Cartesian position (3D)
