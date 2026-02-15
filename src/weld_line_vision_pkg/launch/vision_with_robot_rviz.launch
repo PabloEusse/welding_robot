@@ -1,15 +1,15 @@
 <launch>
   <!-- Camera and video arguments -->
-  <arg name="video_device" default="/dev/video0" />
+  <arg name="video_device" default="/dev/video10" />
   <arg name="image_width" default="640" />
   <arg name="image_height" default="480" />
   <arg name="pixel_format" default="yu12" />
   <arg name="framerate" default="30" />
   <arg name="io_method" default="read" />
   <arg name="rotate_image_90_cw" default="true" />
-  <arg name="camera_info_url" default="" />
+  <arg name="camera_info_url" default="file://$(env HOME)/.ros/camera_info/ipad_droidcam.yaml" />
   <arg name="use_camera_separate_calibration" default="true" />
-  <arg name="allow_homography_fallback_for_robot_pose" default="false" />
+  <arg name="allow_homography_fallback_for_robot_pose" default="true" />
   <arg name="robot_base_y_offset_m" default="0.0" />
   <arg name="id_tl" default="0" />
   <arg name="id_tr" default="1" />
@@ -28,6 +28,7 @@
 
   <!-- RViz -->
   <arg name="use_rviz" default="true" />
+  <arg name="rviz_config" default="$(find weld_line_vision)/config/robot_workspace.rviz" />
 
   <!-- ============================================== -->
   <!-- TF Frames: world -> workspace_frame           -->
@@ -123,6 +124,6 @@
   <!-- ============================================== -->
   <!-- RViz Visualization -->
   <!-- ============================================== -->
-  <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" args="-d $(find weld_line_vision)/config/robot_workspace.rviz" output="screen" required="false"/>
+  <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)" output="screen" required="false"/>
 
 </launch>

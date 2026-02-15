@@ -809,6 +809,16 @@ private:
       cv::rotate(bgr_raw, bgr_full, cv::ROTATE_90_CLOCKWISE);
     }
 
+    auto publishDebugBgr = [&](const cv::Mat& dbg_img) {
+      cv::Mat dbg_out;
+      if (rotate_image_90_cw_) {
+        cv::rotate(dbg_img, dbg_out, cv::ROTATE_90_COUNTERCLOCKWISE);
+      } else {
+        dbg_out = dbg_img;
+      }
+      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_out).toImageMsg());
+    };
+
     // Detect all ArUco markers
     std::vector<int> ids;
     std::vector<std::vector<cv::Point2f>> corners;
@@ -826,7 +836,12 @@ private:
     cv::Mat dbg_aruco;
     if (!computeHomographyFromArucoCenters(bgr_full, H, dbg_aruco)) {
       // Only publish marker detection
-      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      publishDebugBgr(dbg_aruco);
+      return;
+    }
+    if (!cv::checkRange(H)) {
+      ROS_WARN_THROTTLE(1.0, "Homography contains invalid values (NaN/Inf).");
+      publishDebugBgr(dbg_aruco);
       return;
     }
 
@@ -835,7 +850,7 @@ private:
     std::vector<cv::Point> workspace_poly_img;
     if (!buildWorkspaceMaskInImage(H, bgr_full.size(), workspace_mask_full, workspace_poly_img)) {
       ROS_WARN_THROTTLE(1.0, "Failed to build workspace mask from ArUco homography.");
-      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      publishDebugBgr(dbg_aruco);
       return;
     }
 
@@ -884,7 +899,7 @@ private:
     std::vector<cv::Point> ordered = traceSkeleton(skel);
     if ((int)ordered.size() < 10) {
       ROS_WARN_THROTTLE(1.0, "Skeleton too small to be traceable.");
-      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      publishDebugBgr(dbg_aruco);
       return;
     }
 
@@ -918,9 +933,15 @@ private:
     mk.color.b = 1.0;
 
     int outside_workspace = 0;
+    int invalid_points = 0;
     for (size_t i = 0; i < sampled_xy.size(); ++i) {
       const double X = sampled_xy[i].x;
       const double Y = sampled_xy[i].y;
+
+      if (!std::isfinite(X) || !std::isfinite(Y)) {
+        invalid_points++;
+        continue;
+      }
 
       if (!isInsideWorkspace(X, Y, 0.005)) {
         outside_workspace++;
@@ -944,11 +965,15 @@ private:
       ROS_WARN_THROTTLE(2.0, "Filtered %d trajectory points outside workspace bounds", outside_workspace);
     }
 
+    if (invalid_points > 0) {
+      ROS_WARN_THROTTLE(2.0, "Filtered %d non-finite trajectory points (NaN/Inf)", invalid_points);
+    }
+
     if (path.poses.size() < 2) {
       ROS_WARN_THROTTLE(1.0, "No valid trajectory points inside workspace.");
       path_pub_.publish(path);
       marker_pub_.publish(mk);
-      dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_aruco).toImageMsg());
+      publishDebugBgr(dbg_aruco);
       return;
     }
 
@@ -975,7 +1000,7 @@ private:
       cv::circle(dbg, p, 2, cv::Scalar(0, 0, 255), -1);
     }
 
-    dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg).toImageMsg());
+    publishDebugBgr(dbg);
   }
 
 private:

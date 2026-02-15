@@ -2,6 +2,7 @@
 import argparse
 import os
 import sys
+import threading
 import time
 
 import cv2
@@ -18,6 +19,7 @@ class ArucoIntrinsicsCalibrator:
         self.latest_gray = None
         self.latest_bgr = None
         self.image_size = None
+        self.frame_lock = threading.Lock()
 
         self.samples_obj = []
         self.samples_img = []
@@ -81,9 +83,17 @@ class ArucoIntrinsicsCalibrator:
                 rospy.logwarn_throttle(2.0, "cv_bridge conversion failed: %s", str(e))
                 return
 
-        self.latest_gray = gray
-        self.image_size = (gray.shape[1], gray.shape[0])
-        self.latest_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        if gray is None or gray.size == 0:
+            return
+
+        if len(gray.shape) == 3:
+            gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+
+        bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        with self.frame_lock:
+            self.latest_gray = gray
+            self.latest_bgr = bgr
+            self.image_size = (gray.shape[1], gray.shape[0])
 
     @staticmethod
     def _center(corners4):
@@ -140,7 +150,10 @@ class ArucoIntrinsicsCalibrator:
         if len(self.samples_obj) < self.args.min_samples:
             rospy.logwarn("Need at least %d samples, currently %d", self.args.min_samples, len(self.samples_obj))
             return
-        if self.image_size is None:
+        with self.frame_lock:
+            image_size = self.image_size
+
+        if image_size is None:
             rospy.logwarn("No image received yet.")
             return
 
@@ -148,7 +161,7 @@ class ArucoIntrinsicsCalibrator:
         ret, K, D, _, _ = cv2.calibrateCamera(
             self.samples_obj,
             self.samples_img,
-            self.image_size,
+            image_size,
             None,
             None,
             flags=flags,
@@ -172,8 +185,8 @@ class ArucoIntrinsicsCalibrator:
         fx, fy = float(K[0, 0]), float(K[1, 1])
         cx, cy = float(K[0, 2]), float(K[1, 2])
 
-        yaml_txt = f"""image_width: {self.image_size[0]}
-image_height: {self.image_size[1]}
+        yaml_txt = f"""image_width: {image_size[0]}
+image_height: {image_size[1]}
 camera_name: {self.args.camera_name}
 camera_matrix:
   rows: 3
@@ -200,15 +213,26 @@ projection_matrix:
         rospy.loginfo("Saved camera calibration YAML: %s", out)
         rospy.loginfo("fx=%.3f fy=%.3f cx=%.3f cy=%.3f", fx, fy, cx, cy)
 
+    def _latest_frame_copies(self):
+        with self.frame_lock:
+            if self.latest_gray is None or self.latest_bgr is None:
+                return None, None
+            return self.latest_gray.copy(), self.latest_bgr.copy()
+
     def run(self):
         rospy.loginfo("Waiting for images on %s ...", self.args.image_topic)
 
-        while not rospy.is_shutdown() and self.latest_gray is None:
+        while not rospy.is_shutdown():
+            gray, vis = self._latest_frame_copies()
+            if gray is not None and vis is not None:
+                break
             time.sleep(0.05)
 
         while not rospy.is_shutdown():
-            gray = self.latest_gray.copy()
-            vis = self.latest_bgr.copy()
+            gray, vis = self._latest_frame_copies()
+            if gray is None or vis is None:
+                time.sleep(0.01)
+                continue
 
             found, corners, ids = self._detect(gray)
             self._draw_overlay(vis, found, corners, ids)
@@ -228,7 +252,7 @@ projection_matrix:
 def parse_args():
     p = argparse.ArgumentParser(description="Calibrate camera intrinsics from workspace ArUco IDs 0/1/2/3.")
     p.add_argument("--image-topic", default="/droidcam/image_raw")
-    p.add_argument("--output", default="/root/.ros/camera_info/droidcam.yaml")
+    p.add_argument("--output", default="~/.ros/camera_info/droidcam.yaml")
     p.add_argument("--camera-name", default="droidcam")
     p.add_argument("--min-samples", type=int, default=20)
 
@@ -255,6 +279,7 @@ def parse_args():
 def main():
     rospy.init_node("aruco_intrinsics_calibrator", anonymous=True)
     args = parse_args()
+    args.output = os.path.expanduser(args.output)
     calib = ArucoIntrinsicsCalibrator(args)
     calib.run()
 
