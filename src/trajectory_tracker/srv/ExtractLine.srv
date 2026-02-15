@@ -1,9 +1,0 @@
-# ExtractLine.srv
-# Extract drawn line from current camera image
-
-# Request
----
-# Response
-bool success
-string message
-int32 num_points

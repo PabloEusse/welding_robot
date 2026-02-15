@@ -1,8 +1,0 @@
-# StartRecording.srv
-# Start recording trajectory waypoints
-
-# Request
----
-# Response
-bool success
-string message
