@@ -111,6 +111,25 @@ namespace ur
     return T_0_w * T.inverse();
   }
 
+  cc::HomogeneousTransformation URModel::T_ef_w_inv(const cc::JointPosition &q) const
+  {
+    cc::HomogeneousTransformation T_0_w;
+    T_0_w.matrix() << -1., 0., 0., 0.,
+            0., -1., 0., 0.,
+            0., 0., 1., 0.,
+            0., 0., 0., 1.;
+    cc::HomogeneousTransformation T;
+    matrix_T6_0(T, q);
+
+    //get T_ef_0 from model
+    // calling it like this was incorrect 
+    //-> seems to require the T from the matrix_T6_0 function directly, 
+    //not the one from the T_ef_0 wrapper which creates a copy and causes some issue with the transformation
+    //T_ef_0(q); 
+
+    return T_0_w * T.inverse();
+  }
+
   cc::HomogeneousTransformation URModel::T_ef_B(const cc::JointPosition &q) const
   {
     cc::HomogeneousTransformation T;

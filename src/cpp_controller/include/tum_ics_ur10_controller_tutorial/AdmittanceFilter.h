@@ -5,11 +5,14 @@
 #include <geometry_msgs/WrenchStamped.h>
 #include <Eigen/Dense>
 #include <mutex>
+#include <ur_model/ur_model.h>
+#include <control_core/types.h>
 
 namespace tum_ics_ur_robot_lli
 {
 
 using Vector3d = Eigen::Matrix<double, 3, 1>;
+using Vector6d = Eigen::Matrix<double, 6, 1>;
 using Matrix3d = Eigen::Matrix<double, 3, 3>;
 
 /**
@@ -93,9 +96,10 @@ public:
   /**
    * @brief Update admittance filter
    * @param dt Time step
+   * @param q Current joint position (for force frame transformation)
    * @return Position offset to add to desired trajectory
    */
-  Vector3d update(double dt);
+  Vector3d update(double dt, const cc::JointPosition& q);
 
   /**
    * @brief Get velocity offset from admittance
@@ -147,6 +151,7 @@ private:
   Vector3d T_ext_;           // External torque from sensor
   bool sensor_connected_;
   ros::Time last_ft_time_;
+  ur::URModel model_;
 
   // Admittance parameters (diagonal matrices stored as vectors for simplicity)
   Vector3d M_d_;  // Virtual mass [kg]

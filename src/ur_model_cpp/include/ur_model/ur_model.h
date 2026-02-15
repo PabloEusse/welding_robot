@@ -188,7 +188,7 @@ namespace ur
     * @brief endeffector transformation matrix
     */
     cc::HomogeneousTransformation T_ef_0(const cc::JointPosition &q) const;
-
+    cc::HomogeneousTransformation T_ef_w_inv(const cc::JointPosition &q) const;
     cc::HomogeneousTransformation T_5_w_inv(const cc::JointPosition &q) const;
     /** 
     * @brief endeffector transformation matrix wrt to robot base frame
