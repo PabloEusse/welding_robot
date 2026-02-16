@@ -624,14 +624,13 @@ private:
     cv::Point2f marker7_ws = robot_centers_ws[0];   // ID 7 (origin)
     cv::Point2f marker17_ws = robot_centers_ws[1];  // ID 17 (heading reference)
 
-    // Robot base origin is at marker 7 position
-    double robot_x = marker7_ws.x;
-    double robot_y = marker7_ws.y;
-    double robot_z = 0.0;  // On the workspace plane
+    // Robot base origin is at marker 7 position IN WORKSPACE FRAME
+    double robot_x_in_ws = marker7_ws.x;
+    double robot_y_in_ws = marker7_ws.y;
+    double robot_z_in_ws = 0.0;  // On the workspace plane
 
     // Compute robot base frame orientation:
     // Use marker 17 -> 7 as heading direction in the workspace plane.
-    // Keep robot Z axis aligned with workspace +Z so the robot stays upright in RViz.
     double vec_x = marker7_ws.x - marker17_ws.x;
     double vec_y = marker7_ws.y - marker17_ws.y;
     double vec_norm = std::sqrt(vec_x*vec_x + vec_y*vec_y);
@@ -654,40 +653,50 @@ private:
     const double y_x = -dir_y;
     const double y_y = dir_x;
 
-    // Rotation matrix with columns [X_robot | Y_robot | Z_robot]
-    tf2::Matrix3x3 rot_matrix(
+    // Rotation matrix R_ws_base with columns [X_robot | Y_robot | Z_robot]
+    tf2::Matrix3x3 R_ws_base(
       x_x, y_x, 0.0,
       x_y, y_y, 0.0,
       0.0, 0.0, 1.0
     );
 
-    // Convert rotation matrix to quaternion
-    tf2::Quaternion q;
-    rot_matrix.getRotation(q);
+    // Create transform T_ws_base (workspace -> robot_base)
+    tf2::Transform T_ws_base(
+      R_ws_base,
+      tf2::Vector3(robot_x_in_ws, robot_y_in_ws, robot_z_in_ws)
+    );
 
-    // Create and publish TF transform
+    // INVERT: We want T_base_ws (robot_base -> workspace)
+    tf2::Transform T_base_ws = T_ws_base.inverse();
+
+    // Extract inverted position and rotation
+    tf2::Vector3 p_inv = T_base_ws.getOrigin();
+    tf2::Quaternion q_inv = T_base_ws.getRotation();
+
+    // Create and publish INVERTED TF transform
+    // Now: robot_base_frame is the parent, workspace_frame is the child
     geometry_msgs::TransformStamped transform_stamped;
     transform_stamped.header.stamp = stamp;
-    transform_stamped.header.frame_id = frame_id_;  // workspace_frame
-    transform_stamped.child_frame_id = robot_base_frame_;
+    transform_stamped.header.frame_id = robot_base_frame_;  // robot base is now parent
+    transform_stamped.child_frame_id = frame_id_;            // workspace is now child
 
-    transform_stamped.transform.translation.x = robot_x;
-    transform_stamped.transform.translation.y = robot_y;
-    transform_stamped.transform.translation.z = robot_z;
-    transform_stamped.transform.rotation.x = q.x();
-    transform_stamped.transform.rotation.y = q.y();
-    transform_stamped.transform.rotation.z = q.z();
-    transform_stamped.transform.rotation.w = q.w();
+    transform_stamped.transform.translation.x = p_inv.x();
+    transform_stamped.transform.translation.y = p_inv.y();
+    transform_stamped.transform.translation.z = p_inv.z();
+    transform_stamped.transform.rotation.x = q_inv.x();
+    transform_stamped.transform.rotation.y = q_inv.y();
+    transform_stamped.transform.rotation.z = q_inv.z();
+    transform_stamped.transform.rotation.w = q_inv.w();
 
     tf_broadcaster_.sendTransform(transform_stamped);
 
-    // Log robot base info
+    // Log robot base info (original transform for debugging)
     double roll, pitch, yaw_out;
-    rot_matrix.getRPY(roll, pitch, yaw_out);
-    ROS_INFO_THROTTLE(5.0, "Robot base at marker 7: pos=(%.3f, %.3f, %.3f)m, heading(17->7)=%.2f deg, rpy=(%.2f, %.2f, %.2f) deg",
-                      robot_x, robot_y, robot_z,
-                      std::atan2(dir_y, dir_x) * 180.0 / M_PI,
-                      roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw_out * 180.0 / M_PI);
+    R_ws_base.getRPY(roll, pitch, yaw_out);
+    ROS_INFO_THROTTLE(5.0, "Workspace at robot base: inverse_pos=(%.3f, %.3f, %.3f)m, original_pos=(%.3f, %.3f, %.3f)m, heading(17->7)=%.2f deg",
+                      p_inv.x(), p_inv.y(), p_inv.z(),
+                      robot_x_in_ws, robot_y_in_ws, robot_z_in_ws,
+                      std::atan2(dir_y, dir_x) * 180.0 / M_PI);
 
     return true;
   }
@@ -745,25 +754,35 @@ private:
     // Apply translation offset only (no axis/orientation change).
     p.setY(p.y() + robot_base_y_offset_m_);
 
-    tf2::Quaternion q;
-    R.getRotation(q);
+    // Create T_ws_base transform (workspace -> robot_base)
+    tf2::Transform T_ws_base_cam(R, p);
 
+    // INVERT: We want T_base_ws (robot_base -> workspace)
+    tf2::Transform T_base_ws_cam = T_ws_base_cam.inverse();
+
+    // Extract inverted position and rotation
+    tf2::Vector3 p_inv = T_base_ws_cam.getOrigin();
+    tf2::Quaternion q_inv = T_base_ws_cam.getRotation();
+
+    // Create and publish INVERTED TF transform
+    // Now: robot_base_frame is the parent, workspace_frame is the child
     geometry_msgs::TransformStamped transform_stamped;
     transform_stamped.header.stamp = stamp;
-    transform_stamped.header.frame_id = frame_id_;
-    transform_stamped.child_frame_id = robot_base_frame_;
-    transform_stamped.transform.translation.x = p.x();
-    transform_stamped.transform.translation.y = p.y();
-    transform_stamped.transform.translation.z = p.z();
-    transform_stamped.transform.rotation.x = q.x();
-    transform_stamped.transform.rotation.y = q.y();
-    transform_stamped.transform.rotation.z = q.z();
-    transform_stamped.transform.rotation.w = q.w();
+    transform_stamped.header.frame_id = robot_base_frame_;  // robot base is now parent
+    transform_stamped.child_frame_id = frame_id_;            // workspace is now child
+    transform_stamped.transform.translation.x = p_inv.x();
+    transform_stamped.transform.translation.y = p_inv.y();
+    transform_stamped.transform.translation.z = p_inv.z();
+    transform_stamped.transform.rotation.x = q_inv.x();
+    transform_stamped.transform.rotation.y = q_inv.y();
+    transform_stamped.transform.rotation.z = q_inv.z();
+    transform_stamped.transform.rotation.w = q_inv.w();
     tf_broadcaster_.sendTransform(transform_stamped);
 
     double roll, pitch, yaw_out;
     R.getRPY(roll, pitch, yaw_out);
-    ROS_INFO_THROTTLE(5.0, "Robot base (camera-separated): ws pos=(%.3f, %.3f, %.3f)m, rpy=(%.2f, %.2f, %.2f) deg",
+    ROS_INFO_THROTTLE(5.0, "Workspace (camera-separated): inverse_pos=(%.3f, %.3f, %.3f)m, original_ws_pos=(%.3f, %.3f, %.3f)m, rpy=(%.2f, %.2f, %.2f) deg",
+                      p_inv.x(), p_inv.y(), p_inv.z(),
                       p.x(), p.y(), p.z(),
                       roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw_out * 180.0 / M_PI);
 
@@ -810,12 +829,15 @@ private:
     }
 
     auto publishDebugBgr = [&](const cv::Mat& dbg_img) {
-      cv::Mat dbg_out;
+      cv::Mat dbg_temp;
       if (rotate_image_90_cw_) {
-        cv::rotate(dbg_img, dbg_out, cv::ROTATE_90_COUNTERCLOCKWISE);
+        cv::rotate(dbg_img, dbg_temp, cv::ROTATE_90_COUNTERCLOCKWISE);
       } else {
-        dbg_out = dbg_img;
+        dbg_temp = dbg_img;
       }
+      // Additional 90 degree clockwise rotation for debug output
+      cv::Mat dbg_out;
+      cv::rotate(dbg_temp, dbg_out, cv::ROTATE_90_CLOCKWISE);
       dbg_pub_.publish(cv_bridge::CvImage(msg->header, "bgr8", dbg_out).toImageMsg());
     };
 

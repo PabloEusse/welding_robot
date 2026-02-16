@@ -17,20 +17,20 @@ AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_to
   x_.setZero();
   x_dot_.setZero();
   x_ddot_.setZero();
-  ROS_WARN_STREAM("axis modes");
   // Default admittance parameters (tuned for end effector drawing)
   // Z-axis: compliant for force control
   // X,Y: stiff (position control mode by default)
-  M_d_ << 0.0, 0.0, 5;    // Virtual mass [kg]
-  D_d_ << 1000.0, 1000.0, 350.0;  // Virtual damping [Ns/m] - with 60 = xddot_offset = 2.3683 at state transition, with 70 = 10^-6
+  M_d_ << 0.0, 0.0, 20;    // Virtual mass [kg]
+  D_d_ << 1000.0, 1000.0, 200.0;  // Virtual damping [Ns/m] - with 60 = xddot_offset = 2.3683 at state transition, with 70 = 10^-6
   K_d_ << 5.0, 5.0, 15;    // Virtual stiffness [N/m] - 0 for pure force tracking - activate for testing
-
+  G_ = 0.1;
+  //ROS_WARN_STREAM("G_" << G_);
   // Default: X,Y position control, Z force control
   axis_modes_ = {AxisMode::POSITION, AxisMode::POSITION, AxisMode::FORCE};
   setAxisMode(3, axis_modes_[3]);
   // Safety limits
-  x_max_ << 0.02, 0.02, 0.5;       // Max 5cm offset
-  x_dot_max_ << 0.1, 0.1, 0.5;      // Max 10cm/s velocity
+  x_max_ << 0.02, 0.02, 10;       // Max 5cm offset
+  x_dot_max_ << 0.1, 0.1, 50;      // Max 10cm/s velocity
 
   // Subscribe to FT sensor
   ft_sub_ = nh_.subscribe(ft_topic, 1, &AdmittanceFilter::ftSensorCallback, this);
@@ -117,7 +117,7 @@ Vector3d AdmittanceFilter::update(double dt, const cc::JointPosition& q)
     // set F_ext to some test value if sensor is not connected for testing without hardware
     if (!sensor_connected_)
     {
-      F_ext << 0.0, 0.0, -50.0; // Simulate constant 5N downward force for testing
+      F_ext << 0.0, 0.0, 0.0; // Simulate constant 5N downward force for testing
     }
   }
 
@@ -196,7 +196,7 @@ Vector3d AdmittanceFilter::update(double dt, const cc::JointPosition& q)
       // Force control via admittance
       if (M_d_(i) > 0.0)
       {
-        x_ddot(i) = (F_error(i) - D_d_(i) * x_dot_(i) - K_d_(i) * x_(i)) / M_d_(i);
+        x_ddot(i) = -G_ + (F_ext(i) - D_d_(i) * x_dot_(i)) / M_d_(i);//(F_error(i) - D_d_(i) * x_dot_(i) - K_d_(i) * x_(i)) / M_d_(i);
       }
       else
       {
@@ -261,7 +261,10 @@ Vector3d AdmittanceFilter::update(double dt, const cc::JointPosition& q)
   ROS_DEBUG_STREAM_THROTTLE(0.5, "Admittance: F_ext=" << F_ext.transpose()
                             << " F_err=" << F_error.transpose()
                             << " x=" << x_.transpose());
-
+  // ROS_WARN_STREAM("G_" << G_
+  //                 << ", x_ddot=" << x_ddot.transpose()
+  //                 << ", x_dot=" << x_dot_.transpose()
+  //                 << ", x=" << x_.transpose());
   return x_;
 }
 

@@ -1,13 +1,13 @@
 <launch>
   <!-- Camera and video arguments -->
-  <arg name="video_device" default="/dev/video10" />
+  <arg name="video_device" default="/dev/video0" />
   <arg name="image_width" default="640" />
   <arg name="image_height" default="480" />
   <arg name="pixel_format" default="yu12" />
   <arg name="framerate" default="30" />
   <arg name="io_method" default="read" />
   <arg name="rotate_image_90_cw" default="true" />
-  <arg name="camera_info_url" default="file://$(env HOME)/.ros/camera_info/ipad_droidcam.yaml" />
+  <arg name="camera_info_url" default="file://$(env HOME)/.ros/camera_info/iphone_droidcam.yaml" />
   <arg name="use_camera_separate_calibration" default="true" />
   <arg name="allow_homography_fallback_for_robot_pose" default="true" />
   <arg name="robot_base_y_offset_m" default="0.0" />
@@ -31,10 +31,11 @@
   <arg name="rviz_config" default="$(find weld_line_vision)/config/robot_workspace.rviz" />
 
   <!-- ============================================== -->
-  <!-- TF Frames: world -> workspace_frame           -->
+  <!-- TF Frames: world -> base_link (robot base)    -->
+  <!-- Vision node will publish: base_link -> workspace_frame -->
   <!-- ============================================== -->
-  <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_workspace"
-        args="$(arg workspace_x) $(arg workspace_y) $(arg workspace_z) $(arg workspace_roll) $(arg workspace_pitch) $(arg workspace_yaw) world workspace_frame" />
+  <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_robot_base"
+        args="$(arg workspace_x) $(arg workspace_y) $(arg workspace_z) $(arg workspace_roll) $(arg workspace_pitch) $(arg workspace_yaw) world base_link" />
 
   <!-- ============================================== -->
   <!-- Camera Node (USB Camera / DroidCam)           -->

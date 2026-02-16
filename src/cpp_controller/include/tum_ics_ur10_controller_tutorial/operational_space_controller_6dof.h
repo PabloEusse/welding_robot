@@ -9,6 +9,7 @@
 #include <Eigen/Dense>
 #include <memory>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <tf2_msgs/TFMessage.h>
 #include <nav_msgs/Path.h>
@@ -71,6 +72,8 @@ namespace tum_ics_ur_robot_lli
       ros::Publisher traj_pose_pub_;
       ros::Publisher traj_path_pub_;
       ros::Publisher tf_pub_;
+      tf2_ros::Buffer tf_buffer_;
+      std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
 
       // Gain matrices (3x3 for Cartesian control)
       Matrix3d Kp_PD_;
@@ -127,6 +130,13 @@ namespace tum_ics_ur_robot_lli
       // Trajectory visualization (RViz)
       nav_msgs::Path traj_path_msg_;
       std::size_t traj_max_points_;
+
+      // Weld path tracking
+      ros::Subscriber weld_path_sub_;
+      ros::Publisher weld_traj_pub_;
+      nav_msgs::Path weld_traj_path_msg_;
+      std::size_t weld_traj_max_points_;
+      std::size_t weld_path_idx_;  // Current waypoint index for tracking
 
       // UR10 DH parameters (stored internally for self-contained kinematics)
       // Standard UR10 parameters
@@ -204,6 +214,9 @@ namespace tum_ics_ur_robot_lli
       Vector6d computeReferenceTorques(const Vector6d &q, const Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr);
       Vector3d getEndEffectorPosition(const Vector6d& q);
       Vector3d getEndEffectorVelocity(const Vector6d& q, const Vector6d& qp);
+
+      // Weld path callback
+      void weldPathCallback(const nav_msgs::Path::ConstPtr& msg);
     };
 
   } // namespace RobotControllers

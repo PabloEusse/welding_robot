@@ -51,11 +51,17 @@ namespace tum_ics_ur_robot_lli
       traj_path_msg_.header.frame_id = "world";
       traj_max_points_ = 2000;
 
+      // Trajectory visualization (RViz) for weld path
+      weld_traj_pub_ = nh_.advertise<nav_msgs::Path>("/weld_trajectory_path", 1, true);
+      weld_traj_path_msg_.header.frame_id = "world";
+      weld_traj_max_points_ = 2000;
+      weld_path_idx_ = 0;
+
       // Initialize time parameters (matching Python)
       t_INIT_ = 15.0;    // Was 5.0, Python uses 10.0
       t_LINEAR_ = 20.0;
       t_TRACK_SLOW_ = 100.0;
-      t_TRACK_FAST_ = 100.0;  // Match Python's 40s
+      t_TRACK_FAST_ = 0.0;  // Match Python's 40s
       q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0; // Starting pose for trajectory
       
       
@@ -91,10 +97,13 @@ namespace tum_ics_ur_robot_lli
       control_data_pub_ = nh_.advertise<tum_ics_ur_robot_msgs::ControlData>("operational_space_controller_data", 1);
       admittance_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/admittance_state", 10);
       tf_pub_ = nh_.advertise<tf2_msgs::TFMessage>("/tf", 100);
+      tf_listener_ = std::make_unique<tf2_ros::TransformListener>(tf_buffer_);
       // Initialize admittance filter
       admittance_filter_ = std::make_unique<AdmittanceFilter>(nh_, "/schunk_netbox/raw");
       use_admittance_ = true;  // Disabled by default, enable via parameter
 
+      // subscribe to nav_msgs/Path "weld_path"
+      weld_path_sub_ = nh_.subscribe("/weld_line_vision/weld_path", 1, &OperationalSpaceController6DOF::weldPathCallback, this);
     }
 
     OperationalSpaceController6DOF::~OperationalSpaceController6DOF()
@@ -275,7 +284,14 @@ namespace tum_ics_ur_robot_lli
 
           traj_pose_pub_.publish(pose_msg);
           traj_path_pub_.publish(traj_path_msg_);
+
+          // Also publish weld trajectory if we have it
+          if (!weld_traj_path_msg_.poses.empty())
+          { 
+            weld_traj_pub_.publish(weld_traj_path_msg_);
+          }
         }
+
 
       // Compute control torque
       Vector6d tau;
@@ -350,7 +366,7 @@ namespace tum_ics_ur_robot_lli
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        //last_X_ = X_;
+        last_X_ = X_;
       }
       else if (t_elapsed > t_INIT_ + t_LINEAR_ && 
                current_state_ == State::LINEAR)
@@ -359,7 +375,8 @@ namespace tum_ics_ur_robot_lli
         control_space_ = ControlSpace::CARTESIAN;
         //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        //last_X_ = X_;
+        last_X_ = X_;
+        //last_X_(2) -= admittance_filter_->update(0, last_q_)(2);
       }
       else if (t_elapsed > t_INIT_ && current_state_ == State::INIT)
       {
@@ -368,7 +385,7 @@ namespace tum_ics_ur_robot_lli
         //last_t_ = t_elapsed + t0_;
         last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
-        //last_X_ = X_;
+        last_X_ = X_;
       }
 
       // If state changed, update transition variables
@@ -377,36 +394,12 @@ namespace tum_ics_ur_robot_lli
         ROS_INFO_STREAM("State transition: " << static_cast<int>(current_state_) 
                         << " -> " << static_cast<int>(new_state));
         
-        // Compute orbital_center_ when transitioning to TRACK_SLOW (like Python)
-        // Python: self.orbital_center = self.linear_start_pose - shift
-        if (new_state == State::TRACK_SLOW)
-        {
-          // orbital_center_ is offset from the current Cartesian position
-          // In Python: c = self.linear_start_pose (which is where LINEAR ends)
-          // The circle is centered such that the initial point is on the circle
-          // orbital_center_ = X_;  // Start circle from current position
-          // //orbital_center_ << 0.5, 0.0, 0.1; // Override with fixed center for testing
-          // orbital_center_(0) -= circle_radius_;  // Offset so we start at angle=0 on the circle
-          // ROS_INFO_STREAM("Computed orbital_center_: " << orbital_center_.transpose());
-          
-          ROS_WARN_STREAM("[TRANSITION LINEAR→TRACK_SLOW]");
-          ROS_WARN_STREAM("  Current X_: " << X_.transpose());
-          ROS_WARN_STREAM("  orbital_center_ BEFORE: " << orbital_center_.transpose());
-          
-          orbital_center_ = X_;
-          orbital_center_(0) -= circle_radius_;
-          
-          ROS_WARN_STREAM("  orbital_center_ AFTER: " << orbital_center_.transpose());
-          ROS_WARN_STREAM("  last_X_: " << last_X_.transpose());
-          ROS_WARN_STREAM("  Z offset captured: " << orbital_center_(2));
-        }
-        
         current_state_ = new_state;
         // FIXED: Use consistent time source! t_elapsed is based on time.tD(), not ros::Time::now()
         // We need to store the controller time at transition, not wall clock time
         last_t_ = t_elapsed + t0_;  // Convert back to absolute controller time
-        // last_q_ = q_;
-        last_X_ = X_;
+        last_q_ = q_;
+        //last_X_ = X_;
       }
     }
     void OperationalSpaceController6DOF::generateTrajectory(double t,
@@ -424,7 +417,13 @@ namespace tum_ics_ur_robot_lli
       Vector3d track_pos_cartesian = getEndEffectorPosition(start_track_pose_);
       // end effector height = 49-20 = 29cm, difference between base and tabel = table 8cm lower
       track_pos_cartesian << -0.65, 0.0, 0.29-0.09-0.045; // Override with fixed position for testing
-
+      // set first waypoint of weld path to track_pos_cartesian 
+      if (!weld_traj_path_msg_.poses.empty())
+      {
+        track_pos_cartesian << weld_traj_path_msg_.poses[0].pose.position.x, 
+                              weld_traj_path_msg_.poses[0].pose.position.y, 
+                              weld_traj_path_msg_.poses[0].pose.position.z;
+      }
       double omega = 2.0 * M_PI / t_TRACK_SLOW_;
       double omega_z = omega * 15.0;
       double omega_fast = 2.0 * M_PI / t_TRACK_FAST_;
@@ -434,11 +433,6 @@ namespace tum_ics_ur_robot_lli
       omega_z *= 4.0;
       omega_fast *= 4.0;
       omega_z_fast *= 4.0;
-
-      // amplitude seems not been used
-      Vector3d amplitude;
-      amplitude << track_pos_cartesian(0), track_pos_cartesian(0), 0.05;
-
 
       // FIXED: offset should be time since current state started, not absolute time
       // Python uses: tau = (t_now - self.phase_entry_time).to_sec()
@@ -461,34 +455,72 @@ namespace tum_ics_ur_robot_lli
       case State::LINEAR:
       {
         // Linear interpolation in Cartesian space to tracking start position
-        x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
 
+
+        x_des = last_X_ + ((track_pos_cartesian - last_X_) / t_LINEAR_) * offset;
+        //x_des(2) = last_X_(2); // Keep Z constant at desired valuelast_X_
         // NOTE: adding xdot_des here didnt change anything?
         xdot_des = (track_pos_cartesian - last_X_) / t_LINEAR_;
+        //xdot_des(2) = 0; // No velocity in Z direction during linear phase
         break;
       }
       //ROS_INFO_STREAM_THROTTLE(0.5, "track_pos_cartesian - last_X_) / t_LINEAR_" << ((track_pos_cartesian - last_X_) / t_LINEAR_));
 
       case State::TRACK_SLOW:
       {
-        // CONTINUOUS TRAJECTORY: Circle centered at orbital_center_, starting from last_X_
-        // At t=0 (offset=0), theta=0, and we want x_des = last_X_ (where LINEAR ended)
-        // Circle in XY plane with Z oscillation
-        double theta = omega * offset;
-        
-        // Circle centered at orbital_center_, radius = circle_radius_
-        // At theta=0: x = center + radius*cos(0) = center + radius
-        // So orbital_center_ was set to last_X_ - [radius, 0, 0] in updateStateMachine
-        x_des(0) = orbital_center_(0) + circle_radius_ * std::cos(theta);
-        x_des(1) = orbital_center_(1) + circle_radius_ * std::sin(theta);
-        //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z * theta);
-        //x_des(2) = orbital_center_(2);
 
-        // totally removing x_dot_des makes no difference, robot still occilates in z direction
-        xdot_des(0) = 0; //-circle_radius_ * omega * std::sin(theta);
-        xdot_des(1) = 0; //circle_radius_ * omega * std::cos(theta);
-        //xdot_des(2) = vertical_amplitude_ * omega_z * std::cos(omega_z * theta);
-        xdot_des(2) = 0;
+        // Follow weld path waypoints from subscribed nav_msgs/Path
+        if (weld_traj_path_msg_.poses.empty())
+        {
+          // No path received yet - hold current position
+          ROS_WARN_STREAM_THROTTLE(2.0, "[TRACK] No weld path received yet, holding position");
+          x_des = last_X_;
+          xdot_des.setZero();
+          break;
+        }
+
+        std::size_t n_poses = weld_traj_path_msg_.poses.size();
+
+        // Compute time per segment: spread t_TRACK_SLOW_ evenly across all segments
+        double t_per_segment = t_TRACK_SLOW_ / static_cast<double>(n_poses > 1 ? n_poses - 1 : 1);
+
+        // Determine which segment we're on based on elapsed time
+        std::size_t seg_idx = static_cast<std::size_t>(offset / t_per_segment);
+        
+        if (seg_idx >= n_poses - 1)
+        {
+          ROS_WARN_STREAM_THROTTLE(2.0, "[TRACK] Completed all waypoints, holding last position");
+          // Clamp to last waypoint
+          seg_idx = n_poses - 1;
+          const auto& p = weld_traj_path_msg_.poses[seg_idx].pose.position;
+          x_des << p.x, p.y, p.z;
+          xdot_des.setZero();
+        }
+        else
+        {
+          // Interpolate between waypoint seg_idx and seg_idx+1
+          double seg_offset = offset - seg_idx * t_per_segment;
+          double alpha = seg_offset / t_per_segment;  // 0..1 within segment
+
+          const auto& p0 = weld_traj_path_msg_.poses[seg_idx].pose.position;
+          const auto& p1 = weld_traj_path_msg_.poses[seg_idx + 1].pose.position;
+
+          Vector3d wp0(p0.x, p0.y, p0.z);
+          Vector3d wp1(p1.x, p1.y, p1.z);
+
+          x_des = wp0 + alpha * (wp1 - wp0);
+          xdot_des = (wp1 - wp0) / t_per_segment; 
+          // test if x_des is part of weld path and increase seg_idx if so
+          if ((x_des - wp1).norm() < 0.005) // If we're within 1cm of the next waypoint, move to the next segment
+          {
+            seg_idx++;
+          }
+        }
+
+        weld_path_idx_ = seg_idx;  // Store for debugging
+        ROS_INFO_STREAM_THROTTLE(1.0, "[TRACK] seg=" << seg_idx << "/" << n_poses - 1
+                                 << " x_des=" << x_des.transpose());
+                                
         break;
       }
 
@@ -908,49 +940,52 @@ namespace tum_ics_ur_robot_lli
       return -dot * gain;
     }
     
-    // verification function for jacobian cal
-    /*python version:
-      # =========================================================
-    # Debug Jacobian checker (optional, runs once)
-    # =========================================================
-    def _debug_jacobian_full(self, q):
-        eps = 1e-6
-        n = self.nq
+    // &OperationalSpaceController6DOF::weldPathCallback for reading out the path once and then unsubscribing, since we only need the path for visualization and not for control
+    void OperationalSpaceController6DOF::weldPathCallback(const nav_msgs::Path::ConstPtr& msg)
+    {      ROS_INFO_STREAM("Received weld path with " << msg->poses.size() << " poses");
+      if (msg->poses.empty())
+      {
+        ROS_WARN_STREAM("Received empty weld path, ignoring");
+        return;
+      }
+      // Store path in global variable for trajectory generation and visualization
+      weld_traj_path_msg_ = *msg;
+      
+      // transform work_path to world frame using T_world_work
+      // Get Transform from workspace_frame to world frame using tf2 -> is zero?
+      geometry_msgs::TransformStamped T_world_work = tf_buffer_.lookupTransform("world", "workspace_frame", ros::Time(0));
+      ROS_INFO_STREAM("Transform from workspace_frame to world: translation = (" 
+                      << T_world_work.transform.translation.x << ", "
+                      << T_world_work.transform.translation.y << ", "
+                      << T_world_work.transform.translation.z << ")");
+      //T_world_path = T_world_work * T_work_path;
 
-        J6 = np.array(self.model.J_ee_w_fn(*q.flatten()), dtype=float)
-        J_top = J6[0:3, :]
-        J_bot = J6[3:6, :]
+      // transform all poses from workspace frame to world frame
+      for (size_t i = 0; i < weld_traj_path_msg_.poses.size(); i++)
+      {
+        geometry_msgs::PoseStamped& ps = weld_traj_path_msg_.poses[i];
+        geometry_msgs::PoseStamped ps_world;
+        ps_world.header.frame_id = "world";
+        // ps_world.pose.position.x = 0.7 + ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
+        // ps_world.pose.position.y = 0.125 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
+        // ps_world.pose.position.z = 0.06 + ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
+        ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
+        ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
+        ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
 
-        J_num = np.zeros((3, n))
-        x0 = self._fk_pos(q)
-        for i in range(n):
-            q_p = q.copy()
-            q_m = q.copy()
-            q_p[i, 0] += eps
-            q_m[i, 0] -= eps
-            x_p = self._fk_pos(q_p)
-            x_m = self._fk_pos(q_m)
-            J_num[:, i] = ((x_p - x_m) / (2.0 * eps)).flatten()
-
-        rospy.logwarn("====== Jacobian FULL check (position) ======")
-        rospy.logwarn(f"J_num (pos, from FK) =\n{J_num}")
-        rospy.logwarn(f"J6 top(0:3) =\n{J_top}")
-        rospy.logwarn(f"J6 bot(3:6) =\n{J_bot}")
-
-        for blk_name, Jblk in [("top(0:3)", J_top), ("bot(3:6)", J_bot)]:
-            rospy.logwarn(f"---- Matching columns against {blk_name} ----")
-            for i in range(n):
-                errs = [np.linalg.norm(J_num[:, i] - Jblk[:, j]) for j in range(n)]
-                j_best = int(np.argmin(errs))
-                rospy.logwarn(
-                    f"joint {i}: best match col {j_best} err={errs[j_best]:.4e} "
-                    f"all={['%.2e' % e for e in errs]}"
-                )
-
-        if hasattr(self.model, "Jp_ee_w_fk_fn"):
-            J_fk = np.array(self.model.Jp_ee_w_fk_fn(*q.flatten()), dtype=float)
-            rospy.logwarn(f"Jp_fk (d FK pos / d q) =\n{J_fk}")
-            rospy.logwarn(f"||J_num - Jp_fk|| = {np.linalg.norm(J_num - J_fk):.4e}")*/
-      //cpp version
+        ps_world.pose.orientation = ps.pose.orientation; // Assuming no rotation between frames for simplicity
+        weld_traj_path_msg_.poses[i] = ps_world;
+      }
+      //print out all poses for debugging
+      for (size_t i = 0; i < weld_traj_path_msg_.poses.size(); i++)
+      {
+        const auto& p = weld_traj_path_msg_.poses[i].pose.position;
+        ROS_INFO_STREAM("Pose " << i << ": (" << p.x << ", " << p.y << ", " << p.z << ")");
+      }
+        
+      // Unsubscribe after receiving the path once
+      weld_path_sub_.shutdown();
+    }
+  
   } // namespace RobotControllers
 } // namespace tum_ics_ur_robot_lli

@@ -157,7 +157,7 @@ private:
   Vector3d M_d_;  // Virtual mass [kg]
   Vector3d D_d_;  // Virtual damping [Ns/m]
   Vector3d K_d_;  // Virtual stiffness [N/m]
-
+  double G_; // Gravity compensation for vertical axis (if needed)
   // Desired force
   Vector3d F_desired_;
 

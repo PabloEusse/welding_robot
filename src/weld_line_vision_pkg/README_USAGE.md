@@ -20,11 +20,13 @@ This package uses ArUco markers to define the workspace and robot base frame, de
 
 ```
 world
-  └─ workspace_frame (defined by markers ID 0,1,2,3)
-       ├─ weld_path (welding trajectory)
-       └─ base_link (defined by markers ID 7, 17)
-            └─ robot (UR10 + gripper)
+  └─ base_link (robot base, defined by markers ID 7, 17)
+       ├─ workspace_frame (defined by markers ID 0,1,2,3)
+       │    └─ weld_path (welding trajectory)
+       └─ robot (UR10 + gripper)
 ```
+
+**Note:** The robot's base_link is now the primary reference frame. The workspace frame and weld trajectories are expressed relative to the robot base, making it easier to command the robot to follow trajectories.
 
 ## Usage
 
@@ -146,7 +148,8 @@ Print at actual size:
 
 ## Notes
 
-- Workspace frame is defined by the center points of markers ID 0,1,2,3
-- Robot base frame is at the midpoint between markers ID 7 and 17
+- Robot base frame (base_link) is defined by markers ID 7 (front) and ID 17 (back)
 - Robot X-axis points from marker ID 17 → ID 7
-- All coordinates are relative to workspace_frame
+- Workspace frame is defined by the center points of markers ID 0,1,2,3
+- **All coordinates (including weld trajectories) are relative to base_link (robot base frame)**
+- This allows direct trajectory commands in robot coordinates
