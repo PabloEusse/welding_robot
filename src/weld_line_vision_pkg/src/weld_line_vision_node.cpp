@@ -28,7 +28,6 @@ public:
   {
     // Frames
     nh_.param<std::string>("image_topic", image_topic_, "/droidcam/image_raw");
-    // nh_.param<std::string>("frame_id", frame_id_, "paper");
     nh_.param<std::string>("frame_id", frame_id_, "workspace_frame");
 
     // Size of the paper representing the workspace (We used paper for test.)
@@ -98,12 +97,12 @@ public:
 
     dict_ = cv::aruco::getPredefinedDictionary((cv::aruco::PREDEFINED_DICTIONARY_NAME)aruco_dict_id_);
     params_ = cv::aruco::DetectorParameters::create();
-    params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
-    params_->adaptiveThreshWinSizeMin = 3;
-    params_->adaptiveThreshWinSizeMax = 53;
-    params_->adaptiveThreshWinSizeStep = 4;
-    params_->minMarkerPerimeterRate = 0.01;
-    params_->minDistanceToBorder = 3;
+    // params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+    // params_->adaptiveThreshWinSizeMin = 3;
+    // params_->adaptiveThreshWinSizeMax = 53;
+    // params_->adaptiveThreshWinSizeStep = 4;
+    // params_->minMarkerPerimeterRate = 0.01;
+    // params_->minDistanceToBorder = 3;
 
     ROS_INFO("Trajectory Generator initialized. Subscribing to: %s", image_topic_.c_str());
     ROS_INFO("Camera info topic: %s", camera_info_topic_.c_str());
