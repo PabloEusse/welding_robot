@@ -607,6 +607,162 @@ private:
       x_y, y_y, 0.0,
       0.0, 0.0, 1.0
     );
+<<<<<<< HEAD
+=======
+
+    // Create transform T_ws_base (workspace -> robot_base)
+    tf2::Transform T_ws_base(
+      R_ws_base,
+      tf2::Vector3(robot_x_in_ws, robot_y_in_ws, robot_z_in_ws)
+    );
+
+    // INVERT: We want T_base_ws (robot_base -> workspace)
+    tf2::Transform T_base_ws = T_ws_base.inverse();
+
+    // Extract inverted position and rotation
+    tf2::Vector3 p_inv = T_base_ws.getOrigin();
+    tf2::Quaternion q_inv = T_base_ws.getRotation();
+
+    // Create and publish INVERTED TF transform
+    // Now: robot_base_frame is the parent, workspace_frame is the child
+    geometry_msgs::TransformStamped transform_stamped;
+    transform_stamped.header.stamp = stamp;
+    transform_stamped.header.frame_id = robot_base_frame_;  // robot base is now parent
+    transform_stamped.child_frame_id = frame_id_;            // workspace is now child
+
+    transform_stamped.transform.translation.x = p_inv.x();
+    transform_stamped.transform.translation.y = p_inv.y();
+    transform_stamped.transform.translation.z = p_inv.z();
+    transform_stamped.transform.rotation.x = q_inv.x();
+    transform_stamped.transform.rotation.y = q_inv.y();
+    transform_stamped.transform.rotation.z = q_inv.z();
+    transform_stamped.transform.rotation.w = q_inv.w();
+
+    tf_broadcaster_.sendTransform(transform_stamped);
+
+    // Log robot base info (original transform for debugging)
+    double roll, pitch, yaw_out;
+    R_ws_base.getRPY(roll, pitch, yaw_out);
+    ROS_INFO_THROTTLE(5.0, "Workspace at robot base: inverse_pos=(%.3f, %.3f, %.3f)m, original_pos=(%.3f, %.3f, %.3f)m, heading(17->7)=%.2f deg",
+                      p_inv.x(), p_inv.y(), p_inv.z(),
+                      robot_x_in_ws, robot_y_in_ws, robot_z_in_ws,
+                      std::atan2(dir_y, dir_x) * 180.0 / M_PI);
+
+    return true;
+  }
+
+  bool computeRobotBaseTransformFromCamera(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners,
+      const ros::Time& stamp)
+  {
+    cv::Mat R_cam_ws, R_cam_base;
+    cv::Vec3d t_cam_ws, t_cam_base;
+
+    if (!computeWorkspacePoseInCamera(ids, corners, R_cam_ws, t_cam_ws)) {
+      ROS_WARN_THROTTLE(2.0, "Workspace pose in camera frame unavailable (need IDs %d,%d,%d,%d).",
+                        id_tl_, id_tr_, id_bl_, id_br_);
+      return false;
+    }
+
+    if (!computeRobotBasePoseInCamera(ids, corners, R_cam_base, t_cam_base)) {
+      ROS_WARN_THROTTLE(2.0, "Robot base pose in camera frame unavailable (need IDs %d and %d).",
+                        id_robot_top_, id_robot_bottom_);
+      return false;
+    }
+
+    // Compose relative transform via camera frame:
+    // T_ws_base = inv(T_cam_ws) * T_cam_base
+    const tf2::Transform T_cam_ws(
+      cvMatToTf3x3(R_cam_ws),
+      tf2::Vector3(t_cam_ws[0], t_cam_ws[1], t_cam_ws[2]));
+    const tf2::Transform T_cam_base(
+      cvMatToTf3x3(R_cam_base),
+      tf2::Vector3(t_cam_base[0], t_cam_base[1], t_cam_base[2]));
+
+    const tf2::Transform T_ws_base = T_cam_ws.inverse() * T_cam_base;
+    tf2::Vector3 p = T_ws_base.getOrigin();
+    tf2::Matrix3x3 R = T_ws_base.getBasis();
+
+    // Desired convention correction:
+    // rotate the composed robot pose by 180 deg around workspace +Y axis.
+    // p' = Ry(pi) * p, R' = Ry(pi) * R
+    const tf2::Matrix3x3 Ry_pi(
+      -1.0, 0.0,  0.0,
+       0.0, 1.0,  0.0,
+       0.0, 0.0, -1.0);
+    p = Ry_pi * p;
+    R = Ry_pi * R;
+
+    // Additional correction: rotate orientation by 180 deg around robot local +Z.
+    const tf2::Matrix3x3 Rz_pi(
+      -1.0,  0.0, 0.0,
+       0.0, -1.0, 0.0,
+       0.0,  0.0, 1.0);
+    R = R * Rz_pi;
+
+    // Apply translation offset only (no axis/orientation change).
+    p.setY(p.y() + robot_base_y_offset_m_);
+
+    // Create T_ws_base transform (workspace -> robot_base)
+    tf2::Transform T_ws_base_cam(R, p);
+
+    // INVERT: We want T_base_ws (robot_base -> workspace)
+    tf2::Transform T_base_ws_cam = T_ws_base_cam.inverse();
+
+    // Extract inverted position and rotation
+    tf2::Vector3 p_inv = T_base_ws_cam.getOrigin();
+    tf2::Quaternion q_inv = T_base_ws_cam.getRotation();
+
+    // Create and publish INVERTED TF transform
+    // Now: robot_base_frame is the parent, workspace_frame is the child
+    geometry_msgs::TransformStamped transform_stamped;
+    transform_stamped.header.stamp = stamp;
+    transform_stamped.header.frame_id = robot_base_frame_;  // robot base is now parent
+    transform_stamped.child_frame_id = frame_id_;            // workspace is now child
+    transform_stamped.transform.translation.x = p_inv.x();
+    transform_stamped.transform.translation.y = p_inv.y();
+    transform_stamped.transform.translation.z = p_inv.z();
+    transform_stamped.transform.rotation.x = q_inv.x();
+    transform_stamped.transform.rotation.y = q_inv.y();
+    transform_stamped.transform.rotation.z = q_inv.z();
+    transform_stamped.transform.rotation.w = q_inv.w();
+    tf_broadcaster_.sendTransform(transform_stamped);
+
+    double roll, pitch, yaw_out;
+    R.getRPY(roll, pitch, yaw_out);
+    ROS_INFO_THROTTLE(5.0, "Workspace (camera-separated): inverse_pos=(%.3f, %.3f, %.3f)m, original_ws_pos=(%.3f, %.3f, %.3f)m, rpy=(%.2f, %.2f, %.2f) deg",
+                      p_inv.x(), p_inv.y(), p_inv.z(),
+                      p.x(), p.y(), p.z(),
+                      roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw_out * 180.0 / M_PI);
+
+    return true;
+  }
+
+  bool computeRobotBaseTransform(
+      const std::vector<int>& ids,
+      const std::vector<std::vector<cv::Point2f>>& corners_for_camera,
+      const std::vector<std::vector<cv::Point2f>>& corners_for_homography,
+      const cv::Mat& H_img_to_paper,
+      const ros::Time& stamp)
+  {
+    if (use_camera_separate_calibration_) {
+      if (!has_camera_info_) {
+        ROS_WARN_THROTTLE(2.0, "No camera_info yet on %s for camera-separated robot pose.",
+                          camera_info_topic_.c_str());
+        if (!allow_homography_fallback_for_robot_pose_) return false;
+      } else if (computeRobotBaseTransformFromCamera(ids, corners_for_camera, stamp)) {
+        return true;
+      } else {
+        ROS_WARN_THROTTLE(2.0, "Camera-separated robot pose failed.");
+        if (!allow_homography_fallback_for_robot_pose_) return false;
+      }
+      ROS_WARN_THROTTLE(2.0, "Falling back to homography robot pose.");
+    }
+
+    return computeRobotBaseTransformFromHomography(ids, corners_for_homography, H_img_to_paper, stamp);
+  }
+>>>>>>> parent of a1485da... tmp commit
 
     // Create transform T_ws_base (workspace -> robot_base)
     tf2::Transform T_ws_base(
