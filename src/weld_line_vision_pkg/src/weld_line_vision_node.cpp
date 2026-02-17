@@ -50,6 +50,10 @@ public:
     nh_.param<int>("id_tr", id_tr_, 1);   // ID Top Right
     nh_.param<int>("id_bl", id_bl_, 2);   // ID Bottom Left
     nh_.param<int>("id_br", id_br_, 3);   // ID Bottom Right
+    // nh_.param<int>("id_tl", id_tl_, 3);   // ID Top Left
+    // nh_.param<int>("id_tr", id_tr_, 2);   // ID Top Right
+    // nh_.param<int>("id_bl", id_bl_, 1);   // ID Bottom Left
+    // nh_.param<int>("id_br", id_br_, 0);   // ID Bottom Right
 
     // Robot base markers (10cm markers)
     nh_.param<int>("id_robot_top", id_robot_top_, 7);       // ID 7 (top marker)
@@ -449,6 +453,17 @@ private:
     cv::Point2f bottom_right_center(paper_w_m_ - marker_center - paper_w4_margin_offset_, 
                                     paper_h_m_ - marker_center - paper_h4_margin_offset_);   
     paper_pts.emplace_back(top_left_center);  
+    // cv::Point2f top_left_center(-paper_h_m_ + marker_center + paper_h4_margin_offset_, 
+    //                               -paper_w_m_ + marker_center + paper_w4_margin_offset_); 
+
+    // cv::Point2f top_right_center(-paper_h_m_ + marker_center + paper_h3_margin_offset_, 
+    //                                 -marker_center - paper_w3_margin_offset_); 
+
+    // cv::Point2f bottom_left_center(- marker_center - paper_h2_margin_offset_, 
+    //                                 -paper_w_m_ + marker_center + paper_w2_margin_offset_); 
+
+    // cv::Point2f bottom_right_center(- marker_center - paper_h1_margin_offset_, 
+    //                                 - marker_center - paper_w1_margin_offset_); 
     paper_pts.emplace_back(top_right_center);
     paper_pts.emplace_back(bottom_left_center);
     paper_pts.emplace_back(bottom_right_center);          
