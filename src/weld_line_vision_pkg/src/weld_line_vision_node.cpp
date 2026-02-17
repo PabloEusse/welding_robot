@@ -452,7 +452,6 @@ private:
                                     paper_h_m_ - marker_center - paper_h3_margin_offset_); 
     cv::Point2f bottom_right_center(paper_w_m_ - marker_center - paper_w4_margin_offset_, 
                                     paper_h_m_ - marker_center - paper_h4_margin_offset_);   
-    paper_pts.emplace_back(top_left_center);  
     // cv::Point2f top_left_center(-paper_h_m_ + marker_center + paper_h4_margin_offset_, 
     //                               -paper_w_m_ + marker_center + paper_w4_margin_offset_); 
 
@@ -464,6 +463,7 @@ private:
 
     // cv::Point2f bottom_right_center(- marker_center - paper_h1_margin_offset_, 
     //                                 - marker_center - paper_w1_margin_offset_); 
+    paper_pts.emplace_back(top_left_center);  
     paper_pts.emplace_back(top_right_center);
     paper_pts.emplace_back(bottom_left_center);
     paper_pts.emplace_back(bottom_right_center);          

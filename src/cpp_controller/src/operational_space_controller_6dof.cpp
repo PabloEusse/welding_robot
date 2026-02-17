@@ -60,7 +60,7 @@ namespace tum_ics_ur_robot_lli
       // Initialize time parameters (matching Python)
       t_INIT_ = 15.0;    // Was 5.0, Python uses 10.0
       t_LINEAR_ = 20.0;
-      t_TRACK_SLOW_ = 100.0;
+      t_TRACK_SLOW_ = 20.0;
       t_TRACK_FAST_ = 0.0;  // Match Python's 40s
       q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0; // Starting pose for trajectory
       
@@ -503,6 +503,7 @@ namespace tum_ics_ur_robot_lli
           double alpha = seg_offset / t_per_segment;  // 0..1 within segment
 
           const auto& p0 = weld_traj_path_msg_.poses[seg_idx].pose.position;
+          
           const auto& p1 = weld_traj_path_msg_.poses[seg_idx + 1].pose.position;
 
           Vector3d wp0(p0.x, p0.y, p0.z);
@@ -511,10 +512,10 @@ namespace tum_ics_ur_robot_lli
           x_des = wp0 + alpha * (wp1 - wp0);
           xdot_des = (wp1 - wp0) / t_per_segment; 
           // test if x_des is part of weld path and increase seg_idx if so
-          if ((x_des - wp1).norm() < 0.005) // If we're within 1cm of the next waypoint, move to the next segment
-          {
-            seg_idx++;
-          }
+          // if ((x_des - wp1).norm() < 0.005) // If we're within 1cm of the next waypoint, move to the next segment
+          // {
+          //   seg_idx++;
+          // }
         }
 
         weld_path_idx_ = seg_idx;  // Store for debugging
@@ -534,7 +535,7 @@ namespace tum_ics_ur_robot_lli
         //x_des(2) = orbital_center_(2) + vertical_amplitude_ * std::sin(omega_z_fast * theta);
         //x_des(2) = orbital_center_(2);
 
-        xdot_des(0) =0 ;// -circle_radius_ * omega_fast * std::sin(theta);
+        xdot_des(0) = 0 ;// -circle_radius_ * omega_fast * std::sin(theta);
         xdot_des(1) = 0;//circle_radius_ * omega_fast * std::cos(theta);
         //xdot_des(2) = vertical_amplitude_ * omega_z_fast * std::cos(omega_z_fast * theta);
         xdot_des(2) = 0;
@@ -966,13 +967,15 @@ namespace tum_ics_ur_robot_lli
         geometry_msgs::PoseStamped& ps = weld_traj_path_msg_.poses[i];
         geometry_msgs::PoseStamped ps_world;
         ps_world.header.frame_id = "world";
-        ps_world.pose.position.x = 0.750 + ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
-        ps_world.pose.position.y = 0.127 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
+        ps_world.pose.position.x = -0.750 - ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
+        ps_world.pose.position.y = -0.127 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
         ps_world.pose.position.z = 0.3 + ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
         // ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
         // ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
         // ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
 
+        const auto& p = weld_traj_path_msg_.poses[i].pose.position;
+        ROS_INFO_STREAM("Pose before transformation" << i << ": (" << p.x << ", " << p.y << ", " << p.z << ")");
         ps_world.pose.orientation = ps.pose.orientation; // Assuming no rotation between frames for simplicity
         weld_traj_path_msg_.poses[i] = ps_world;
       }

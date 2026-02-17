@@ -1,0 +1,130 @@
+<launch>
+  <!-- Camera and video arguments -->
+  <arg name="video_device" default="/dev/video0" />
+  <arg name="image_width" default="640" />
+  <arg name="image_height" default="480" />
+  <arg name="pixel_format" default="yu12" />
+  <arg name="framerate" default="30" />
+  <arg name="io_method" default="read" />
+  <arg name="rotate_image_90_cw" default="true" />
+  <arg name="camera_info_url" default="file://$(env HOME)/.ros/camera_info/iphone_droidcam.yaml" />
+  <arg name="use_camera_separate_calibration" default="true" />
+  <arg name="allow_homography_fallback_for_robot_pose" default="true" />
+  <arg name="robot_base_y_offset_m" default="0.0" />
+  <arg name="id_tl" default="0" />
+  <arg name="id_tr" default="1" />
+  <arg name="id_bl" default="2" />
+  <arg name="id_br" default="3" />
+
+  <!-- Robot model selection -->
+  <arg name="robot_model" default="$(find weld_line_vision)/urdf/ur10_joint_limited_no_world.urdf.xacro" />
+  <arg name="use_robot" default="true" />
+  <arg name="workspace_x" default="0.0" />
+  <arg name="workspace_y" default="0.0" />
+  <arg name="workspace_z" default="0.0" />
+  <arg name="workspace_roll" default="0.0" />
+  <arg name="workspace_pitch" default="0.0" />
+  <arg name="workspace_yaw" default="0.0" />
+
+  <!-- RViz -->
+  <arg name="use_rviz" default="true" />
+  <arg name="rviz_config" default="$(find weld_line_vision)/config/robot_workspace.rviz" />
+
+  <!-- ============================================== -->
+  <!-- TF Frames: world -> base_link (robot base)    -->
+  <!-- Vision node will publish: base_link -> workspace_frame -->
+  <!-- ============================================== -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_robot_base"
+        args="$(arg workspace_x) $(arg workspace_y) $(arg workspace_z) $(arg workspace_roll) $(arg workspace_pitch) $(arg workspace_yaw) world base_link" />
+
+  <!-- ============================================== -->
+  <!-- Camera Node (USB Camera / DroidCam)           -->
+  <!-- ============================================== -->
+  <node pkg="usb_cam" type="usb_cam_node" name="droidcam" output="screen">
+    <param name="video_device" value="$(arg video_device)"/>
+    <param name="image_width" value="$(arg image_width)"/>
+    <param name="image_height" value="$(arg image_height)"/>
+    <param name="pixel_format" value="$(arg pixel_format)"/>
+    <param name="framerate" value="$(arg framerate)"/>
+    <param name="io_method" value="$(arg io_method)"/>
+    <param name="camera_frame_id" value="camera_optical_frame"/>
+    <param name="camera_name" value="droidcam"/>
+    <param name="camera_info_url" value="$(arg camera_info_url)"/>
+  </node>
+
+  <!-- ============================================== -->
+  <!-- Vision Node: Workspace & Robot Base Detection -->
+  <!-- ============================================== -->
+  <node pkg="weld_line_vision" type="weld_line_vision_node" name="weld_line_vision" output="screen">
+    <!-- Image topic -->
+    <param name="image_topic" value="/droidcam/image_raw"/>
+    <param name="camera_info_topic" value="/droidcam/camera_info"/>
+    <param name="rotate_image_90_cw" value="$(arg rotate_image_90_cw)"/>
+    <param name="use_camera_separate_calibration" value="$(arg use_camera_separate_calibration)"/>
+    <param name="allow_homography_fallback_for_robot_pose" value="$(arg allow_homography_fallback_for_robot_pose)"/>
+    <param name="robot_base_y_offset_m" value="$(arg robot_base_y_offset_m)"/>
+
+    <!-- Frame IDs -->
+    <param name="frame_id" value="workspace_frame"/>
+    <param name="robot_base_frame" value="base_link"/>
+
+    <!-- Workspace paper size (A4) -->
+    <param name="paper_width_m" value="0.210"/>
+    <param name="paper_height_m" value="0.297"/>
+
+    <!-- ArUco workspace markers (IDs 0,1,2,3 = 6cm markers) -->
+    <param name="aruco_dict_id" value="0"/> <!-- DICT_4X4_50 -->
+    <param name="aruco_marker_size" value="0.06"/>
+    <param name="id_tl" value="$(arg id_tl)"/>  <!-- Top Left -->
+    <param name="id_tr" value="$(arg id_tr)"/>  <!-- Top Right -->
+    <param name="id_bl" value="$(arg id_bl)"/>  <!-- Bottom Left -->
+    <param name="id_br" value="$(arg id_br)"/>  <!-- Bottom Right -->
+
+    <!-- ArUco robot base markers (IDs 7=top, 17=bottom, 10cm markers) -->
+    <param name="id_robot_top" value="7"/>
+    <param name="id_robot_bottom" value="17"/>
+    <param name="robot_marker_size" value="0.10"/>
+    <param name="robot_marker_distance" value="0.20"/> <!-- Approximate distance between markers -->
+
+    <!-- HSV color thresholds for weld line detection (cyan/blue) -->
+    <param name="h_low" value="75"/>
+    <param name="h_high" value="130"/>
+    <param name="s_low" value="20"/>
+    <param name="v_low" value="40"/>
+
+    <!-- Morphology and sampling parameters -->
+    <param name="morph_ksize" value="3"/>
+    <param name="sample_step_px" value="6"/>
+  </node>
+
+  <!-- ============================================== -->
+  <!-- Robot Description (URDF) -->
+  <!-- ============================================== -->
+  <group if="$(arg use_robot)">
+    <param name="robot_description" command="$(find xacro)/xacro $(arg robot_model)" />
+
+    <!-- Robot State Publisher: publishes TF for all robot joints -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" output="screen">
+      <param name="tf_prefix" value=""/>
+    </node>
+
+    <!-- Joint State Publisher: for manual joint control in RViz -->
+    <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" output="screen">
+      <param name="use_gui" value="true"/>
+      <rosparam param="zeros">
+        shoulder_pan_joint: 0.0
+        shoulder_lift_joint: -1.57
+        elbow_joint: 1.57
+        wrist_1_joint: -1.57
+        wrist_2_joint: 0.0
+        wrist_3_joint: 0.0
+      </rosparam>
+    </node>
+  </group>
+
+  <!-- ============================================== -->
+  <!-- RViz Visualization -->
+  <!-- ============================================== -->
+  <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)" output="screen" required="false"/>
+
+</launch>
