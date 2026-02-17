@@ -953,11 +953,11 @@ namespace tum_ics_ur_robot_lli
       
       // transform work_path to world frame using T_world_work
       // Get Transform from workspace_frame to world frame using tf2 -> is zero?
-      geometry_msgs::TransformStamped T_world_work = tf_buffer_.lookupTransform("world", "workspace_frame", ros::Time(0));
-      ROS_INFO_STREAM("Transform from workspace_frame to world: translation = (" 
-                      << T_world_work.transform.translation.x << ", "
-                      << T_world_work.transform.translation.y << ", "
-                      << T_world_work.transform.translation.z << ")");
+      // geometry_msgs::TransformStamped T_world_work = tf_buffer_.lookupTransform("world", "workspace_frame", ros::Time(0));
+      // ROS_INFO_STREAM("Transform from workspace_frame to world: translation = (" 
+      //                 << T_world_work.transform.translation.x << ", "
+      //                 << T_world_work.transform.translation.y << ", "
+      //                 << T_world_work.transform.translation.z << ")");
       //T_world_path = T_world_work * T_work_path;
 
       // transform all poses from workspace frame to world frame
@@ -966,12 +966,12 @@ namespace tum_ics_ur_robot_lli
         geometry_msgs::PoseStamped& ps = weld_traj_path_msg_.poses[i];
         geometry_msgs::PoseStamped ps_world;
         ps_world.header.frame_id = "world";
-        // ps_world.pose.position.x = 0.7 + ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
-        // ps_world.pose.position.y = 0.125 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
-        // ps_world.pose.position.z = 0.06 + ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
-        ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
-        ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
-        ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
+        ps_world.pose.position.x = 0.750 + ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
+        ps_world.pose.position.y = 0.127 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
+        ps_world.pose.position.z = 0.3 + ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
+        // ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
+        // ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
+        // ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
 
         ps_world.pose.orientation = ps.pose.orientation; // Assuming no rotation between frames for simplicity
         weld_traj_path_msg_.poses[i] = ps_world;
