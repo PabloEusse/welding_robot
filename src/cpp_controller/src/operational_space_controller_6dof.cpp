@@ -482,7 +482,15 @@ namespace tum_ics_ur_robot_lli
         std::size_t n_poses = weld_traj_path_msg_.poses.size();
 
         // Compute time per segment: spread t_TRACK_SLOW_ evenly across all segments
-        double t_per_segment = t_TRACK_SLOW_ / static_cast<double>(n_poses > 1 ? n_poses - 1 : 1);
+        //double t_per_segment = t_TRACK_SLOW_ / static_cast<double>(n_poses > 1 ? n_poses - 1 : 1);
+        
+        double t_per_segment;
+        if (n_poses > 1) {
+            t_per_segment = t_TRACK_SLOW_ / static_cast<double>(n_poses - 1);
+        } else {
+            t_per_segment = t_TRACK_SLOW_ / 1.0;  // just t_TRACK_SLOW_
+        }
+
 
         // Determine which segment we're on based on elapsed time
         std::size_t seg_idx = static_cast<std::size_t>(offset / t_per_segment);
@@ -511,10 +519,10 @@ namespace tum_ics_ur_robot_lli
           x_des = wp0 + alpha * (wp1 - wp0);
           xdot_des = (wp1 - wp0) / t_per_segment; 
           // test if x_des is part of weld path and increase seg_idx if so
-          if ((x_des - wp1).norm() < 0.005) // If we're within 1cm of the next waypoint, move to the next segment
-          {
-            seg_idx++;
-          }
+          // if ((x_des - wp1).norm() < 0.005) // If we're within 1cm of the next waypoint, move to the next segment
+          // {
+          //   seg_idx++;
+          // }
         }
 
         weld_path_idx_ = seg_idx;  // Store for debugging
@@ -966,12 +974,12 @@ namespace tum_ics_ur_robot_lli
         geometry_msgs::PoseStamped& ps = weld_traj_path_msg_.poses[i];
         geometry_msgs::PoseStamped ps_world;
         ps_world.header.frame_id = "world";
-        // ps_world.pose.position.x = 0.7 + ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
-        // ps_world.pose.position.y = 0.125 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
-        // ps_world.pose.position.z = 0.06 + ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
-        ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
-        ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
-        ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
+        ps_world.pose.position.x = 1.23 + ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
+        ps_world.pose.position.y = 0.105 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
+        ps_world.pose.position.z = 0.0; //+ ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
+        // ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
+        // ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
+        // ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
 
         ps_world.pose.orientation = ps.pose.orientation; // Assuming no rotation between frames for simplicity
         weld_traj_path_msg_.poses[i] = ps_world;
