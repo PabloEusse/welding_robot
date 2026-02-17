@@ -1,6 +1,6 @@
 <launch>
   <!-- Camera and video arguments -->
-  <arg name="video_device" default="/dev/video0" />
+  <arg name="video_device" default="/dev/video10" />
   <arg name="image_width" default="640" />
   <arg name="image_height" default="480" />
   <arg name="pixel_format" default="yu12" />
@@ -27,8 +27,8 @@
   <arg name="workspace_yaw" default="0.0" />
 
   <!-- RViz -->
-  <arg name="use_rviz" default="true" />
-  <arg name="rviz_config" default="$(find weld_line_vision)/config/robot_workspace.rviz" />
+  <!-- <arg name="use_rviz" default="true" />
+  <arg name="rviz_config" default="$(find weld_line_vision)/config/robot_workspace.rviz" /> -->
 
   <!-- ============================================== -->
   <!-- TF Frames: world -> base_link (robot base)    -->
@@ -125,6 +125,6 @@
   <!-- ============================================== -->
   <!-- RViz Visualization -->
   <!-- ============================================== -->
-  <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)" output="screen" required="false"/>
+  <!-- <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)" output="screen" required="false"/> -->
 
 </launch>

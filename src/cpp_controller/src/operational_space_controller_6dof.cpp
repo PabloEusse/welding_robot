@@ -969,9 +969,12 @@ namespace tum_ics_ur_robot_lli
         // ps_world.pose.position.x = 0.7 + ps.pose.position.x; //T_world_work.transform.translation.x + ps.pose.position.x;
         // ps_world.pose.position.y = 0.125 + ps.pose.position.y;  //T_world_work.transform.translation.y + ps.pose.position.y; 
         // ps_world.pose.position.z = 0.06 + ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
-        ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
-        ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
-        ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
+        // ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
+        // ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
+        // ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
+        ps_world.pose.position.x = 0.742 + ps.pose.position.x;
+        ps_world.pose.position.y = 0.138 + ps.pose.position.y; 
+        ps_world.pose.position.z = 0.307;
 
         ps_world.pose.orientation = ps.pose.orientation; // Assuming no rotation between frames for simplicity
         weld_traj_path_msg_.poses[i] = ps_world;
