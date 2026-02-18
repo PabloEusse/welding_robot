@@ -61,7 +61,7 @@ namespace tum_ics_ur_robot_lli
       t_INIT_ = 15.0;    // Was 5.0, Python uses 10.0
       t_LINEAR_ = 20.0;
       t_TRACK_SLOW_ = 20.0;
-      t_TRACK_FAST_ = 0.0;  // Match Python's 40s
+      t_TRACK_FAST_ = 20.0;  // Match Python's 40s
       q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0; // Starting pose for trajectory
       
       
@@ -292,7 +292,6 @@ namespace tum_ics_ur_robot_lli
           }
         }
 
-
       // Compute control torque
       Vector6d tau;
       tau.setZero();
@@ -303,7 +302,7 @@ namespace tum_ics_ur_robot_lli
                     static_cast<float>(xdot_current(1)), 
                     static_cast<float>(xdot_current(2))};
       cartesian_pub_.publish(x_msg);
-      if (control_space_ == ControlSpace::JOINT)
+      if (control_space_ == ControlSpace::JOINT) //JOINT
       {
         tau = jointSpaceController(state_adj, q_des, qdot_des, qddot_des, dt);
         X_ = getEndEffectorPosition(q_);
@@ -336,7 +335,6 @@ namespace tum_ics_ur_robot_lli
         msg.torques[i] = tau(i);
       }
       control_data_pub_.publish(msg);
-
       return tau;
     }
 
@@ -355,7 +353,6 @@ namespace tum_ics_ur_robot_lli
       {
         new_state = State::END;
         control_space_ = ControlSpace::JOINT;
-        //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
         last_X_ = X_;
       }
@@ -364,7 +361,6 @@ namespace tum_ics_ur_robot_lli
       {
         new_state = State::TRACK_FAST;
         control_space_ = ControlSpace::CARTESIAN;
-        //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
         last_X_ = X_;
       }
@@ -373,7 +369,6 @@ namespace tum_ics_ur_robot_lli
       {
         new_state = State::TRACK_SLOW;
         control_space_ = ControlSpace::CARTESIAN;
-        //last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
         last_X_ = X_;
         last_X_(2) -= admittance_filter_->update(0, last_q_)(2);
@@ -382,7 +377,6 @@ namespace tum_ics_ur_robot_lli
       {
         new_state = State::LINEAR;
         control_space_ = ControlSpace::CARTESIAN;
-        //last_t_ = t_elapsed + t0_;
         last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
         last_X_ = X_;
@@ -395,11 +389,8 @@ namespace tum_ics_ur_robot_lli
                         << " -> " << static_cast<int>(new_state));
         
         current_state_ = new_state;
-        // FIXED: Use consistent time source! t_elapsed is based on time.tD(), not ros::Time::now()
-        // We need to store the controller time at transition, not wall clock time
         last_t_ = t_elapsed + t0_;  // Convert back to absolute controller time
         last_q_ = q_;
-        //last_X_ = X_;
       }
     }
     void OperationalSpaceController6DOF::generateTrajectory(double t,
@@ -434,17 +425,8 @@ namespace tum_ics_ur_robot_lli
       omega_fast *= 4.0;
       omega_z_fast *= 4.0;
 
-      // FIXED: offset should be time since current state started, not absolute time
-      // Python uses: tau = (t_now - self.phase_entry_time).to_sec()
       double offset = t - last_t_;
       
-      // DEBUG: Log trajectory generation details
-      ROS_INFO_STREAM_THROTTLE(0.5, "[TRAJ] State=" << static_cast<int>(current_state_) 
-                               << " t=" << t << " last_t_=" << last_t_ << " offset=" << offset
-                               << " last_X_=" << last_X_.transpose()
-                               << " track_pos=" << track_pos_cartesian.transpose()
-                              << "time offset" << offset);
-
       switch (current_state_)
       {
       case State::INIT:
@@ -512,11 +494,6 @@ namespace tum_ics_ur_robot_lli
           x_des = wp0 + alpha * (wp1 - wp0);
           x_des(2) += last_X_(2);
           xdot_des = (wp1 - wp0) / t_per_segment; 
-          // test if x_des is part of weld path and increase seg_idx if so
-          // if ((x_des - wp1).norm() < 0.005) // If we're within 1cm of the next waypoint, move to the next segment
-          // {
-          //   seg_idx++;
-          // }
         }
 
         weld_path_idx_ = seg_idx;  // Store for debugging
@@ -525,7 +502,6 @@ namespace tum_ics_ur_robot_lli
                                 
         break;
       }
-
       case State::TRACK_FAST:
       {
         // Same continuous trajectory but faster
@@ -542,7 +518,6 @@ namespace tum_ics_ur_robot_lli
         xdot_des(2) = 0;
         break;
       }
-
       case State::END:
       default:
         q_des = closestEquivalentAngles(non_singular_pose_, q_);
@@ -557,11 +532,6 @@ namespace tum_ics_ur_robot_lli
                                                                    double dt)
     {
 
-      // std_msgs::Float32MultiArray x_des_msg;
-      // x_des_msg.data = {static_cast<float>(q_des(0)), 
-      //                   static_cast<float>(q_des(1)), 
-      //                   static_cast<float>(q_des(2))};
-      // joint_states_des_pub_.publish(x_des_msg);
       Vector6d tau;
       tau.setZero();
       Eigen::Matrix<double, 6, 6> Kp = (10 * Eigen::Matrix<double, 6, 6>::Identity());
@@ -616,9 +586,6 @@ namespace tum_ics_ur_robot_lli
       Vector3d xdot_des_modified = xdot_des;
       Vector3d xddot_des_modified = xddot_des;
       Eigen::Matrix<double, 3, 3> selectionMatrixAdmittance = Matrix3d::Identity();
-      // selectionMatrixAdmittance << 1, 0, 0,
-      //                              0, 1, 0,
-      //                              0, 0, 1;
       if (use_admittance_ && admittance_filter_)
       {
         // Debug: Check joint configuration before passing to admittance filter
@@ -644,10 +611,9 @@ namespace tum_ics_ur_robot_lli
           Vector3d xddot_offset = admittance_filter_->getAccelerationOffset();
 
           // Modify desired trajectory with admittance offset
-          x_des_modified = x_des + x_offset;//selectionMatrixAdmittance * x_offset;
-          xdot_des_modified = xdot_des + xdot_offset;//selectionMatrixAdmittance * xdot_offset;
-          // NOTE: Adding xddot_des_modified let joint velocities explode
-          xddot_des_modified = xddot_des + xddot_offset;//selectionMatrixAdmittance * xddot_offset;
+          x_des_modified = x_des + x_offset;
+          xdot_des_modified = xdot_des + xdot_offset;
+          xddot_des_modified = xddot_des + xddot_offset;
           ROS_INFO_STREAM_THROTTLE(0.5, "[ADMITTANCE] x_offset=" << x_offset.transpose() 
                                    << " xdot_offset=" << xdot_offset.transpose() 
                                    << " xddot_offset=" << xddot_offset.transpose());
@@ -683,7 +649,6 @@ namespace tum_ics_ur_robot_lli
                                   ;
       // Cartesian errors (use modified desired if admittance is enabled)
       Vector3d delta_x = x_current - x_des_modified;
-      // ROS_WARN_STREAM("delta_x: " << delta_x.transpose());
       Vector3d delta_xdot = xdot_current - xdot_des_modified;
 
       // Update integral error
@@ -691,7 +656,6 @@ namespace tum_ics_ur_robot_lli
 
       // Get full Jacobian and extract translational part (rows 0-2)
       Eigen::Matrix<double, 6, 6> J_full = computeJacobian(state.q);
-      // NOTE: Robot gets unstable, if we use (3,0) -> hence (3,0) is the rotational part and (0,0) is the translational part of the Jacobian
       Eigen::Matrix<double, 3, 3> J_ee = J_full.block<3, 3>(0, 0);  // Translational Jacobian
 
       // Compute pseudoinverse of Jacobian
@@ -709,65 +673,47 @@ namespace tum_ics_ur_robot_lli
                           0, 0, 0, 0, 0, 0;
       if (controller_type_ == ControllerType::PD)
       {
-      Vector6d qrdot, qrddot;
-      qrdot.setZero();
-      qrddot.setZero();
-      // Reference Cartesian velocityKreg_PD_cart_
-      Vector3d xrdot = xdot_des_modified - Kp_PD_ * delta_x;
-      Vector3d xrddot = xddot_des_modified - delta_xdot;//Kp_PD_ * delta_xdot;
-      // Map to joint space
-      qrdot.head(3) = J_pinv * xrdot;
-      qrddot.head(3) = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot.head(3)); // Jdot_ee is the time derivative of the Jacobian 
+        Vector6d qrdot, qrddot;
+        qrdot.setZero();
+        qrddot.setZero();
+        // Reference Cartesian velocityKreg_PD_cart_
+        Vector3d xrdot = xdot_des_modified - Kp_PD_ * delta_x;
+        Vector3d xrddot = xddot_des_modified - delta_xdot;
+        // Map to joint space
+        qrdot.head(3) = J_pinv * xrdot;
+        qrddot.head(3) = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot.head(3)); // Jdot_ee is the time derivative of the Jacobian 
 
-      // Sliding variable in joint space
-      Vector3d S_q = state.qp.head(3) - qrdot.head(3);
-      
-      std_msgs::Float32MultiArray delta_msg;
-      delta_msg.data = {static_cast<float>(xrdot(0)), 
-                        static_cast<float>(xrdot(1)), 
-                        static_cast<float>(xrdot(2))};
-      steady_state_error_pub_.publish(delta_msg);
+        // Sliding variable in joint space
+        Vector3d S_q = state.qp.head(3) - qrdot.head(3);
+        
+        std_msgs::Float32MultiArray delta_msg;
+        delta_msg.data = {static_cast<float>(xrdot(0)), 
+                          static_cast<float>(xrdot(1)), 
+                          static_cast<float>(xrdot(2))};
+        steady_state_error_pub_.publish(delta_msg);
 
-      std_msgs::Float32MultiArray x_des_msg;
-      x_des_msg.data = {static_cast<float>(x_des(0)),
-                        static_cast<float>(x_des(1)),
-                        static_cast<float>(x_des(2))};
-      joint_states_des_pub_.publish(x_des_msg);
-        //TODO: implement missing parts aka ro, computeRegressor and
-        //Vector6d Yr = computeRegressor(state.q, state.qp, qrdot, xddot_des); // Compute regressor based on current state and desired acceleration
-        //Vector6d theta -= (ro * (Yr.transpose() * S_q)) * dt; // Update adaptive parameters using gradient descent
-        //Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot); 
-        // Simple PD control (can be extended with adaptive control)
-        tau.head(3) = -Kreg_PD_cart_ * S_q ;//+ Yr_theta;
+        std_msgs::Float32MultiArray x_des_msg;
+        x_des_msg.data = {static_cast<float>(x_des(0)),
+                          static_cast<float>(x_des(1)),
+                          static_cast<float>(x_des(2))};
+        joint_states_des_pub_.publish(x_des_msg);
+
+        tau.head(3) = -Kreg_PD_cart_ * S_q ;
         tau(3) = jointControl(state.q, 50);
         tau(4) = (M_PI/2 - state.q(4)) * 10;
         tau += selectionMatrix * computeReferenceTorques(state.q, state.qp, qrdot, qrddot); // Add feedforward term based on desired trajectory
       }
       else if (controller_type_ == ControllerType::PID)
       {
-        
         // //TODO: implement correct version of PID Controller 
-        // // PID in Cartesian space
-        // Vector3d xrdot = xdot_des - Kp_PID_ * delta_x - Ki_PID_ * integral_error_acc_;
-        // Vector3d xrddot = xddot_des - Kp_PID_ * delta_xdot - Ki_PID_ * delta_x;
-        // Vector6d qrdot = J_pinv * xrdot;
-        // // TODO: implement Jdot_ee helper function that calculates the time derivative of the Jacobian based on current q and qp
-        // Vector6d qrddot = J_pinv * (xrddot- Jdot_ee_w_translation * qrdot); // Jdot_ee is the time derivative of the Jacobian 
-        // Vector6d S_q = state.qp - qrdot;
-        // //TODO: add helper function that calculate M, C, G and maybe also regressor Y from model.zip files
-        // //Yr_theta = M * qrddot + C * qrdot + G; // Regressor-based adaptive control law (simplified)
-        // Yr_theta = computeYr_theta(state.q, state.qp, qrdot, qrddot);
-        // tau = -Kd_PID_(0, 0) * S_q + Yr_theta;  // Use scalar Kd for simplicity
       }
 
       // Publish Cartesian tracking data
-
       std_msgs::Float32MultiArray x_msg;
       x_msg.data = {static_cast<float>(xdot_current(0)), 
                     static_cast<float>(xdot_current(1)), 
                     static_cast<float>(xdot_current(2))};
       cartesian_pub_.publish(x_msg);
-
       return tau;
     }
     Vector6d OperationalSpaceController6DOF::closestEquivalentAngles(const Vector6d &q_ref, 
@@ -892,31 +838,13 @@ namespace tum_ics_ur_robot_lli
 
     Vector3d OperationalSpaceController6DOF::getEndEffectorVelocity(const Vector6d &q, const Vector6d &qp)
     {
-
-      /*
-      def get_ee_w_dot(self):
-        J_ee_w = self.model.J_ee_w_fn(*self.q)
-        
-        # Calculate the end-effector Twist in the world frame V_ee_w
-        V_ee_w = J_ee_w @ self.qdot
-        return V_ee_w[3:]
-      */
       Eigen::Matrix<double, 6, 6> J = computeJacobian(q);
       Eigen::Matrix<double, 6, 1> V_ee_w = J * qp; // End-effector twist in world frame
       return V_ee_w.block<3, 1>(0, 0); // 0,0 for linear velocity -> had here 3,0 before!!!
-
-      /*
-      // xdot = J * qdot (linear velocity part only)
-      Eigen::Matrix<double, 6, 6> J = computeJacobian(q);
-      Eigen::Matrix<double, 3, 6> J_linear = J.block<3, 6>(0, 0);
-      return J_linear * qp;      
-      */
-
     }
 
     Vector6d OperationalSpaceController6DOF::computeYr_theta(const Vector6d& q, const Vector6d& qdot, const Vector6d& qrdot, const Vector6d& qrddot)
     {
-      //get Regressor Y and theta_ from ur_model
       // Initalize the robot regressor matrix
       ur::URModel::Regressor Y = model_.regressor(q, qdot, qrdot, qrddot);
       
@@ -942,7 +870,6 @@ namespace tum_ics_ur_robot_lli
       return -dot * gain;
     }
     
-    // &OperationalSpaceController6DOF::weldPathCallback for reading out the path once and then unsubscribing, since we only need the path for visualization and not for control
     void OperationalSpaceController6DOF::weldPathCallback(const nav_msgs::Path::ConstPtr& msg)
     {      ROS_INFO_STREAM("Received weld path with " << msg->poses.size() << " poses");
       if (msg->poses.empty())
@@ -952,15 +879,6 @@ namespace tum_ics_ur_robot_lli
       }
       // Store path in global variable for trajectory generation and visualization
       weld_traj_path_msg_ = *msg;
-      
-      // transform work_path to world frame using T_world_work
-      // Get Transform from workspace_frame to world frame using tf2 -> is zero?
-      // geometry_msgs::TransformStamped T_world_work = tf_buffer_.lookupTransform("world", "workspace_frame", ros::Time(0));
-      // ROS_INFO_STREAM("Transform from workspace_frame to world: translation = (" 
-      //                 << T_world_work.transform.translation.x << ", "
-      //                 << T_world_work.transform.translation.y << ", "
-      //                 << T_world_work.transform.translation.z << ")");
-      //T_world_path = T_world_work * T_work_path;
 
       // transform all poses from workspace frame to world frame
       for (size_t i = 0; i < weld_traj_path_msg_.poses.size(); i++)
@@ -968,12 +886,10 @@ namespace tum_ics_ur_robot_lli
         geometry_msgs::PoseStamped& ps = weld_traj_path_msg_.poses[i];
         geometry_msgs::PoseStamped ps_world;
         ps_world.header.frame_id = "world";
-        ps_world.pose.position.x = -0.7 - ps.pose.position.y; //T_world_work.transform.translation.x + ps.pose.position.x;
-        ps_world.pose.position.y = 0.21 - ps.pose.position.x;  //T_world_work.transform.translation.y + ps.pose.position.y; 
-        ps_world.pose.position.z = 0.0;// + ps.pose.position.z;//T_world_work.transform.translation.z + ps.pose.position.z;
-        // ps_world.pose.position.x = T_world_work.transform.translation.x + ps.pose.position.x;
-        // ps_world.pose.position.y = T_world_work.transform.translation.y + ps.pose.position.y; 
-        // ps_world.pose.position.z = T_world_work.transform.translation.z + ps.pose.position.z;
+        ps_world.pose.position.x = -0.7 - ps.pose.position.y;
+        ps_world.pose.position.y = 0.21 - ps.pose.position.x;  
+        ps_world.pose.position.z = 0.0;
+
 
         const auto& p = weld_traj_path_msg_.poses[i].pose.position;
         ROS_INFO_STREAM("Pose before transformation" << i << ": (" << p.x << ", " << p.y << ", " << p.z << ")");

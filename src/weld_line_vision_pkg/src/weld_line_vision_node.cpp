@@ -28,7 +28,6 @@ public:
   {
     // Frames
     nh_.param<std::string>("image_topic", image_topic_, "/droidcam/image_raw");
-    // nh_.param<std::string>("frame_id", frame_id_, "paper");
     nh_.param<std::string>("frame_id", frame_id_, "workspace_frame");
 
     // Size of the paper representing the workspace (We used paper for test.)
@@ -50,10 +49,6 @@ public:
     nh_.param<int>("id_tr", id_tr_, 1);   // ID Top Right
     nh_.param<int>("id_bl", id_bl_, 2);   // ID Bottom Left
     nh_.param<int>("id_br", id_br_, 3);   // ID Bottom Right
-    // nh_.param<int>("id_tl", id_tl_, 3);   // ID Top Left
-    // nh_.param<int>("id_tr", id_tr_, 2);   // ID Top Right
-    // nh_.param<int>("id_bl", id_bl_, 1);   // ID Bottom Left
-    // nh_.param<int>("id_br", id_br_, 0);   // ID Bottom Right
 
     // Robot base markers (10cm markers)
     nh_.param<int>("id_robot_top", id_robot_top_, 7);       // ID 7 (top marker)
@@ -309,17 +304,12 @@ private:
   // This function returns the number of active neighbours for a pixel (x,y).
   int neighborCount8(const cv::Mat& skel, int x, int y) const
   {
-    // remember that the coordinate system in OpenCV is defined like:
-    // (0,0) --- x
-    //   |
-    //   y
     static const int dx[8] = {-1, 0, 1,-1, 1,-1, 0, 1};
     static const int dy[8] = {-1,-1,-1, 0, 0, 1, 1, 1};
     int c = 0;
     for (int k = 0; k < 8; ++k) {
       int nx = x + dx[k], ny = y + dy[k];
       if (inBounds(nx, ny, skel.cols, skel.rows) && skel.at<uint8_t>(ny, nx) > 0) c++;
-    //std::cout<<"Iteration: "<<k<<", nx value: "<<nx<<"ny value:"<<ny<<"skel columns"<<skel.cols<<"skel rows: "<<skel.rows<<std::endl;
     }
     return c;
   }
@@ -452,17 +442,6 @@ private:
                                     paper_h_m_ - marker_center - paper_h3_margin_offset_); 
     cv::Point2f bottom_right_center(paper_w_m_ - marker_center - paper_w4_margin_offset_, 
                                     paper_h_m_ - marker_center - paper_h4_margin_offset_);   
-    // cv::Point2f top_left_center(-paper_h_m_ + marker_center + paper_h4_margin_offset_, 
-    //                               -paper_w_m_ + marker_center + paper_w4_margin_offset_); 
-
-    // cv::Point2f top_right_center(-paper_h_m_ + marker_center + paper_h3_margin_offset_, 
-    //                                 -marker_center - paper_w3_margin_offset_); 
-
-    // cv::Point2f bottom_left_center(- marker_center - paper_h2_margin_offset_, 
-    //                                 -paper_w_m_ + marker_center + paper_w2_margin_offset_); 
-
-    // cv::Point2f bottom_right_center(- marker_center - paper_h1_margin_offset_, 
-    //                                 - marker_center - paper_w1_margin_offset_); 
     paper_pts.emplace_back(top_left_center);  
     paper_pts.emplace_back(top_right_center);
     paper_pts.emplace_back(bottom_left_center);
@@ -1117,7 +1096,6 @@ private:
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "weld_line_vision_node");
-  //ros::init(argc, argv, "weld_line_vision_aruco");
   ros::NodeHandle nh("~");
   TrajectoryGenerator node(nh);
   ros::spin();

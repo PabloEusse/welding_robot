@@ -32,7 +32,7 @@ namespace tum_ics_ur_robot_lli
       {
         INIT,
         LINEAR,
-        TRACK_SLOW,
+        TRACK_SLOW,        
         TRACK_FAST,
         END
       };
