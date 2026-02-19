@@ -1,3 +1,17 @@
+/**
+ * @file weld_line_vision_node.cpp
+ * @brief ROS node for weld-line trajectory extraction via camera-based vision.
+ *
+ * This node subscribes to a camera image stream, detects ArUco markers to
+ * establish a workspace homography (pixel -> real-world metres), segments a
+ * coloured weld line using HSV thresholding, skeletonises the result, and
+ * publishes the ordered trajectory as a nav_msgs/Path in a metric workspace
+ * frame.  It also estimates the robot base pose relative to the workspace
+ * using either PnP (camera intrinsics) or homography-based methods and
+ * broadcasts the corresponding TF transform.
+ */
+
+// ---- ROS core & message headers ----
 #include <ros/ros.h>
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
@@ -13,6 +27,7 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <visualization_msgs/Marker.h>
 
+// ---- OpenCV & standard library ----
 #include <opencv2/opencv.hpp>
 #include <opencv2/ximgproc.hpp>
 #include <opencv2/aruco.hpp>      
@@ -20,9 +35,31 @@
 #include <cmath>
 #include <sstream>
 
+/**
+ * @class TrajectoryGenerator
+ * @brief Detects a coloured weld line via camera, and publishes the ordered
+ *        trajectory as a ROS Path along with the robot-base TF.
+ *
+ * Processing pipeline (per frame):
+ *   1. Detect four workspace-corner ArUco markers -> compute homography.
+ *   2. Optionally detect two robot-base ArUco markers -> compute TF.
+ *   3. Segment the weld-line colour in HSV, restrict to workspace mask.
+ *   4. Morphological cleanup -> Zhang-Suen skeletonisation -> ordered tracing.
+ *   5. Sample skeleton at configurable step, project to workspace metres,
+ *      and publish as nav_msgs/Path + visualisation markers.
+ */
 class TrajectoryGenerator
 {
 public:
+  /**
+   * @brief Construct and initialise the trajectory generator.
+   * @param nh  Private ROS NodeHandle used for parameter loading,
+   *            subscribers and publishers.
+   *
+   * All tunable parameters (marker IDs, HSV thresholds, workspace
+   * dimensions, etc.) are loaded from the ROS parameter server with
+   * sensible defaults.
+   */
   explicit TrajectoryGenerator(ros::NodeHandle& nh)
   : nh_(nh), it_(nh_)
   {
@@ -114,12 +151,24 @@ public:
   }
 
 private:
+  /**
+   * @brief Check whether a 2-D point lies inside the workspace rectangle.
+   * @param x      X coordinate in workspace metres.
+   * @param y      Y coordinate in workspace metres.
+   * @param margin Extra tolerance around the workspace edges (metres).
+   * @return true if (x, y) is within the (optionally enlarged) workspace.
+   */
   bool isInsideWorkspace(double x, double y, double margin = 0.0) const
   {
     return (x >= -margin && x <= (paper_w_m_ + margin) &&
             y >= -margin && y <= (paper_h_m_ + margin));
   }
 
+  /**
+   * @brief Callback for sensor_msgs/CameraInfo — caches intrinsic matrix
+   *        and distortion coefficients needed by solvePnP.
+   * @param msg  Incoming CameraInfo message.
+   */
   void cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr& msg)
   {
     if (msg->K[0] <= 0.0 || msg->K[4] <= 0.0) {
@@ -150,6 +199,11 @@ private:
     has_camera_info_ = true;
   }
 
+  /**
+   * @brief Normalise a 3-D vector in-place.
+   * @param v  Vector to normalise.
+   * @return false if the vector's norm is zero/non-finite (left unchanged).
+   */
   static bool normalizeVec(cv::Vec3d& v)
   {
     const double n = cv::norm(v);
@@ -158,6 +212,7 @@ private:
     return true;
   }
 
+  /** @brief Convert a 3x3 cv::Mat (CV_64F) to a tf2 rotation matrix. */
   static tf2::Matrix3x3 cvMatToTf3x3(const cv::Mat& R)
   {
     return tf2::Matrix3x3(
@@ -167,6 +222,12 @@ private:
     );
   }
 
+  /**
+   * @brief Build the canonical 3-D object points for a square ArUco marker
+   *        centred at the origin, lying in the Z = 0 plane.
+   * @param marker_size_m  Side length of the marker in metres.
+   * @return Four corner points in marker-local coordinates.
+   */
   static std::vector<cv::Point3f> markerObjectPoints(double marker_size_m)
   {
     const float s = static_cast<float>(marker_size_m * 0.5);
@@ -178,6 +239,17 @@ private:
     };
   }
 
+  /**
+   * @brief Estimate the pose of a single ArUco marker in the camera frame
+   *        using solvePnP (IPPE_SQUARE).
+   * @param ids            Detected marker IDs.
+   * @param corners        Corresponding 2-D corner sets.
+   * @param target_id      The marker ID to look for.
+   * @param marker_size_m  Physical side length of the marker (metres).
+   * @param[out] rvec      Rodrigues rotation vector (camera <- marker).
+   * @param[out] tvec      Translation vector (camera <- marker).
+   * @return true on success; false if the marker was not found or PnP failed.
+   */
   bool estimateSingleMarkerPoseInCamera(
       const std::vector<int>& ids,
       const std::vector<std::vector<cv::Point2f>>& corners,
@@ -199,6 +271,15 @@ private:
     return false;
   }
 
+  /**
+   * @brief Compute the workspace-plane pose in the camera frame using all
+   *        four workspace-corner ArUco markers and solvePnP.
+   * @param ids              Detected marker IDs.
+   * @param corners          Corresponding 2-D corner sets.
+   * @param[out] R_cam_ws    3x3 rotation matrix (camera <- workspace).
+   * @param[out] t_cam_ws    Translation vector   (camera <- workspace).
+   * @return true if all four corner markers were found and PnP succeeded.
+   */
   bool computeWorkspacePoseInCamera(
       const std::vector<int>& ids,
       const std::vector<std::vector<cv::Point2f>>& corners,
@@ -242,6 +323,21 @@ private:
     return true;
   }
 
+  /**
+   * @brief Estimate the robot-base pose in the camera frame from the two
+   *        robot ArUco markers (id_robot_top_ and id_robot_bottom_).
+   *
+   * The base frame is built so that:
+   *   - X axis = marker-7 normal (out-of-plane),
+   *   - Z axis = direction from marker 17 -> marker 7 (up along the robot),
+   *   - Y axis = completes the right-hand frame.
+   *
+   * @param ids               Detected marker IDs.
+   * @param corners           Corresponding 2-D corner sets.
+   * @param[out] R_cam_base   3x3 rotation matrix (camera <- robot_base).
+   * @param[out] t_cam_base   Translation vector   (camera <- robot_base).
+   * @return true on success.
+   */
   bool computeRobotBasePoseInCamera(
       const std::vector<int>& ids,
       const std::vector<std::vector<cv::Point2f>>& corners,
@@ -296,11 +392,16 @@ private:
     return true;
   }
 
+  /** @brief Pixel-bounds check for image coordinates. */
   static inline bool inBounds(int x, int y, int w, int h)
   {
     return (x >= 0 && y >= 0 && x < w && y < h);
   }
 
+  /**
+   * @brief Count the number of active (non-zero) 8-connected neighbours of
+   *        pixel (x, y) in a binary skeleton image.
+   */
   // This function returns the number of active neighbours for a pixel (x,y).
   int neighborCount8(const cv::Mat& skel, int x, int y) const
   {
@@ -314,6 +415,17 @@ private:
     return c;
   }
 
+  /**
+   * @brief Walk along a thinned (1-pixel-wide) skeleton and return the
+   *        pixels in traversal order.
+   *
+   * The walk starts from an endpoint (1 neighbour) if one exists, otherwise
+   * from the first foreground pixel.  It greedily follows unvisited
+   * neighbours in 8-connectivity.
+   *
+   * @param skel  Binary skeleton image (CV_8U, 255 = foreground).
+   * @return Ordered vector of skeleton pixel coordinates.
+   */
   std::vector<cv::Point> traceSkeleton(const cv::Mat& skel) const
   {
     std::vector<cv::Point> points;
@@ -385,6 +497,7 @@ private:
     return points;
   }
 
+  /** @brief Compute the centre of a 4-corner ArUco detection. */
   static cv::Point2f markerCenter(const std::vector<cv::Point2f>& corners4)
   {
     cv::Point2f c(0.f, 0.f);
@@ -393,6 +506,13 @@ private:
     return c;
   }
 
+  /**
+   * @brief Map a point from the 90°-CW-rotated image back to the original
+   *        (un-rotated) image coordinates.
+   * @param p_rot          Point in the rotated image.
+   * @param original_rows  Number of rows in the *original* (pre-rotation) image.
+   * @return Corresponding point in the original image.
+   */
   static cv::Point2f pointFromRotated90CWToOriginal(const cv::Point2f& p_rot, int original_rows)
   {
     // Rotation used in the pipeline: original -> rotated is 90deg CW.
@@ -400,6 +520,10 @@ private:
     return cv::Point2f(p_rot.y, static_cast<float>(original_rows - 1) - p_rot.x);
   }
 
+  /**
+   * @brief Reverse the 90°-CW rotation for all ArUco corner sets so that
+   *        their coordinates match the original camera image (needed for PnP).
+   */
   static std::vector<std::vector<cv::Point2f>> unrotateCorners90CWToOriginal(
       const std::vector<std::vector<cv::Point2f>>& corners_rot,
       int original_rows)
@@ -417,6 +541,7 @@ private:
     return corners_orig;
   }
 
+  /** @brief Format a list of ArUco IDs as a comma-separated string for logging. */
   static std::string idsToString(const std::vector<int>& ids)
   {
     if (ids.empty()) return "none";
@@ -428,6 +553,11 @@ private:
     return oss.str();
   }
 
+  /**
+   * @brief Calculate expected ArUco marker centres in workspace (paper)
+   *        coordinates, accounting for marker size and margin offsets.
+   * @return Four 2-D points (TL, TR, BL, BR) in metres on the paper.
+   */
   std::vector<cv::Point2f> computeAuroCenters() const
   {
     std::vector<cv::Point2f> paper_pts;
@@ -449,6 +579,15 @@ private:
     return paper_pts;                                                     
   }
 
+  /**
+   * @brief Detect the four workspace-corner ArUco markers and compute the
+   *        homography that maps image pixels to paper-plane metres.
+   * @param bgr_full         Input BGR image (possibly rotated).
+   * @param[out] H_img_to_paper  3x3 homography matrix (pixel -> metres).
+   * @param[out] dbg_draw    Debug image with detected markers drawn.
+   * @return true if all four corner markers were found and the homography
+   *         was computed successfully.
+   */
   bool computeHomographyFromArucoCenters(
       const cv::Mat& bgr_full,
       cv::Mat& H_img_to_paper,
@@ -513,6 +652,19 @@ private:
     return true;
   }
 
+  /**
+   * @brief Build a binary mask in image space that covers only the
+   *        calibrated workspace rectangle.
+   *
+   * This is used to gate the colour segmentation so that objects outside
+   * the ArUco-delimited workspace are ignored.
+   *
+   * @param H_img_to_paper       Homography from pixels to paper metres.
+   * @param image_size           Size of the full input image.
+   * @param[out] workspace_mask  Output CV_8U mask (255 inside workspace).
+   * @param[out] workspace_poly  Image-space polygon of the workspace boundary.
+   * @return true on success.
+   */
   bool buildWorkspaceMaskInImage(
       const cv::Mat& H_img_to_paper,
       const cv::Size& image_size,
@@ -551,6 +703,10 @@ private:
     return true;
   }
 
+  /**
+   * @brief Publish a LINE_STRIP marker outlining the workspace rectangle
+   *        in RViz, so the workspace boundary is always visible.
+   */
   void publishWorkspaceMarker(const ros::Time& stamp)
   {
     visualization_msgs::Marker ws_marker;
@@ -583,6 +739,18 @@ private:
     workspace_marker_pub_.publish(ws_marker);
   }
 
+  /**
+   * @brief Estimate the robot-base pose relative to the workspace using
+   *        the ArUco homography (2-D planar approach).
+   *
+   * The heading is derived from the marker-17 -> marker-7 direction in
+   * workspace coordinates.  The published TF is inverted
+   * (robot_base -> workspace) so downstream nodes see the workspace as a
+   * child of the robot base.
+   *
+   * @return true if both robot markers were detected and the transform was
+   *         published.
+   */
   bool computeRobotBaseTransformFromHomography(
       const std::vector<int>& ids,
       const std::vector<std::vector<cv::Point2f>>& corners,
@@ -695,6 +863,17 @@ private:
     return true;
   }
 
+  /**
+   * @brief Estimate the robot-base pose relative to the workspace using
+   *        full 3-D PnP (camera-separated calibration approach).
+   *
+   * Both the workspace and the robot-base poses are first estimated in
+   * the camera frame independently; their relative transform is then
+   * composed and corrected with convention rotations before publishing.
+   *
+   * @return true if all required markers were detected and the transform
+   *         was published.
+   */
   bool computeRobotBaseTransformFromCamera(
       const std::vector<int>& ids,
       const std::vector<std::vector<cv::Point2f>>& corners,
@@ -783,6 +962,13 @@ private:
     return true;
   }
 
+  /**
+   * @brief Top-level dispatcher that selects between the camera-separated
+   *        (PnP) and homography-based robot-base pose estimation methods.
+   *
+   * Falls back to homography if PnP is unavailable and the fallback flag
+   * is enabled.
+   */
   bool computeRobotBaseTransform(
       const std::vector<int>& ids,
       const std::vector<std::vector<cv::Point2f>>& corners_for_camera,
@@ -807,6 +993,19 @@ private:
     return computeRobotBaseTransformFromHomography(ids, corners_for_homography, H_img_to_paper, stamp);
   }
 
+  /**
+   * @brief Main image callback — runs the full vision pipeline on every
+   *        incoming camera frame.
+   *
+   * Steps:
+   *   1. Convert ROS image -> OpenCV BGR (optionally rotate 90° CW).
+   *   2. Detect ArUco markers and compute pixel->workspace homography.
+   *   3. Compute & publish robot-base TF (PnP or homography).
+   *   4. HSV threshold + workspace mask -> binary weld-line mask.
+   *   5. Morphological open/close -> Zhang-Suen skeleton -> ordered trace.
+   *   6. Sample skeleton, project to workspace metres, publish Path.
+   *   7. Publish debug images (ArUco overlay, mask, skeleton).
+   */
   void imgCallback(const sensor_msgs::ImageConstPtr& msg)
   {
     cv::Mat bgr_raw;
@@ -1020,40 +1219,43 @@ private:
   }
 
 private:
+  // ---- ROS handles ----
   ros::NodeHandle nh_;
   image_transport::ImageTransport it_;
-  image_transport::Subscriber img_sub_;
-  ros::Subscriber cam_info_sub_;
+  image_transport::Subscriber img_sub_;         ///< Raw camera image subscriber
+  ros::Subscriber cam_info_sub_;                ///< CameraInfo subscriber (for PnP)
 
-  ros::Publisher path_pub_;
-  ros::Publisher marker_pub_;
-  ros::Publisher workspace_marker_pub_;
+  // ---- Publishers ----
+  ros::Publisher path_pub_;                     ///< Ordered weld trajectory (nav_msgs/Path)
+  ros::Publisher marker_pub_;                   ///< Weld-point spheres for RViz
+  ros::Publisher workspace_marker_pub_;         ///< Workspace boundary outline for RViz
 
-  image_transport::Publisher dbg_pub_;
-  image_transport::Publisher mask_pub_;
-  image_transport::Publisher skel_pub_;
+  image_transport::Publisher dbg_pub_;          ///< Debug image (ArUco overlay + skeleton)
+  image_transport::Publisher mask_pub_;         ///< Binary colour mask (for debugging)
+  image_transport::Publisher skel_pub_;         ///< Skeletonised mask (for debugging)
 
-  tf2_ros::TransformBroadcaster tf_broadcaster_;
+  tf2_ros::TransformBroadcaster tf_broadcaster_; ///< Broadcasts robot_base <-> workspace TF
 
+  // ---- Topic & frame names ----
   std::string image_topic_, frame_id_;
   std::string robot_base_frame_;
   std::string camera_info_topic_;
   std::string camera_frame_id_ = "camera_optical_frame";
 
-  cv::Mat camera_matrix_;
-  cv::Mat dist_coeffs_;
-  bool has_camera_info_ = false;
-  bool use_camera_separate_calibration_ = true;
+  // ---- Camera intrinsics (filled by cameraInfoCallback) ----
+  cv::Mat camera_matrix_;                       ///< 3x3 intrinsic matrix K
+  cv::Mat dist_coeffs_;                         ///< Distortion coefficients D
+  bool has_camera_info_ = false;                ///< True once valid CameraInfo received
+  bool use_camera_separate_calibration_ = true; ///< Use PnP (true) vs homography (false)
   bool allow_homography_fallback_for_robot_pose_ = false;
 
+  // ---- Workspace (paper) dimensions in metres ----
+  double paper_w_m_ = 0.210;                   ///< Paper width  (default: A4)
+  double paper_h_m_ = 0.297;                   ///< Paper height (default: A4)
 
-  // paper magnitudes
-  double paper_w_m_ = 0.210;
-  double paper_h_m_ = 0.297;
-
-  // Aruco parameters
-  double aruco_marker_size_ = 0.06;
-  double paper_w1_margin_offset_ = 0.015;
+  // ---- ArUco workspace-corner marker settings ----
+  double aruco_marker_size_ = 0.06;            ///< Side length of workspace ArUco markers (m)
+  double paper_w1_margin_offset_ = 0.015;      ///< Horizontal margin offset per corner
   double paper_h1_margin_offset_ = 0.018;
   double paper_w2_margin_offset_ = 0.015;
   double paper_h2_margin_offset_ = 0.018;
@@ -1061,38 +1263,40 @@ private:
   double paper_h3_margin_offset_ = 0.018;
   double paper_w4_margin_offset_ = 0.015;
   double paper_h4_margin_offset_ = 0.018;
-  
 
-  // aruco parameters
+  // ---- ArUco dictionary & detection parameters ----
   int aruco_dict_id_ = (int)cv::aruco::DICT_4X4_50;
-  int id_tl_ = 0, id_tr_ = 1, id_bl_ = 2, id_br_ = 3;
+  int id_tl_ = 0, id_tr_ = 1, id_bl_ = 2, id_br_ = 3; ///< Workspace corner IDs
   cv::Ptr<cv::aruco::Dictionary> dict_;
   cv::Ptr<cv::aruco::DetectorParameters> params_;
 
-  // Robot base markers
-  int id_robot_top_ = 7;
-  int id_robot_bottom_ = 17;
-  double robot_marker_size_ = 0.10;
-  double robot_marker_distance_ = 0.20;
-  double robot_base_y_offset_m_ = 0.0;
+  // ---- Robot-base ArUco marker settings ----
+  int id_robot_top_ = 7;                       ///< Marker at robot "top"   (nearer end-effector)
+  int id_robot_bottom_ = 17;                   ///< Marker at robot "bottom" (nearer base)
+  double robot_marker_size_ = 0.10;            ///< Side length of robot markers (m)
+  double robot_marker_distance_ = 0.20;        ///< Physical distance between the two markers (m)
+  double robot_base_y_offset_m_ = 0.0;         ///< Lateral offset correction (m)
 
-  // hsv values
+  // ---- HSV colour-segmentation thresholds (defaults tuned for cyan-blue) ----
   int h_low_ = 75, h_high_ = 130;
   int s_low_ = 20, v_low_ = 40;
 
-  // roi (optional)
+  // ---- Optional region-of-interest (0 = disabled) ----
   int roi_x_ = 0, roi_y_ = 0, roi_w_ = 0, roi_h_ = 0;
 
-  // morph
+  // ---- Morphological kernel size (must be odd) ----
   int morph_ksize_ = 3;
 
-  // sampling step
+  // ---- Skeleton sampling step in pixels ----
   int sample_step_px_ = 6;
 
-  // image orientation
-  bool rotate_image_90_cw_ = false;
+  // ---- Image pre-processing ----
+  bool rotate_image_90_cw_ = false;            ///< Rotate input image 90° CW before processing
 };
 
+/**
+ * @brief Entry point — initialises ROS and spins the TrajectoryGenerator node.
+ */
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "weld_line_vision_node");
