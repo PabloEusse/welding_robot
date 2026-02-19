@@ -1,3 +1,33 @@
+/**
+ * @file operational_space_controller_6dof.cpp
+ * @brief Multi-mode controller for the UR10 robot arm supporting Joint Space,
+ *        Operational (Cartesian) Space, and Admittance Control.
+ *
+ * This controller implements a state-machine-driven trajectory tracking system
+ * for a UR10 manipulator with three control modes:
+ *
+ *   1. **Joint Space Control** — PD-based joint-level torque control used during
+ *      initialization (moving to a non-singular configuration) and as a fallback
+ *      near kinematic singularities.
+ *
+ *   2. **Operational Space Control** — Cartesian-level PD control that maps
+ *      task-space errors through the manipulator Jacobian to produce joint
+ *      torques. Includes feedforward compensation via the robot dynamics model
+ *      (inertia, Coriolis, gravity).
+ *
+ *   3. **Admittance Control** — An outer-loop force-compliant layer that modifies
+ *      the desired Cartesian trajectory based on external forces measured by an
+ *      F/T sensor. Implemented as a mass-spring-damper admittance filter.
+ *
+ * The state machine transitions through: INIT -> LINEAR -> TRACK_SLOW -> TRACK_FAST -> END,
+ * each phase using time-based polynomial/linear interpolation for smooth trajectories.
+ *
+ * Key dependencies:
+ *   - tum_ics_ur_robot_lli (UR10 low-level interface & dynamics model)
+ *   - Eigen (linear algebra)
+ *   - ROS (communication, TF, visualization)
+ */
+
 #include <tum_ics_ur10_controller_tutorial/operational_space_controller_6dof.h>
 #include <tum_ics_ur_robot_msgs/ControlData.h>
 #include <Eigen/SVD>
@@ -11,6 +41,16 @@ namespace tum_ics_ur_robot_lli
   namespace RobotControllers
   {
 
+    /**
+     * @brief Construct the 6-DOF operational space controller.
+     *
+     * Initializes all gain matrices (PD, PID, regularization), UR10 DH
+     * parameters, trajectory timing, ROS publishers/subscribers, the
+     * admittance filter, and internal state variables.
+     *
+     * @param weight  Blending weight for this control effort.
+     * @param name    Human-readable controller name (shown in logs).
+     */
     OperationalSpaceController6DOF::OperationalSpaceController6DOF(double weight, const QString &name)
         : ControlEffort(name, SPLINE_TYPE, JOINT_SPACE, weight),
           is_first_iter_(true),
@@ -26,21 +66,24 @@ namespace tum_ics_ur_robot_lli
       d4_ = 0.163941; // Link offset d4
       d5_ = 0.1157;   // Link offset d5
       d6_ = 0.0922;   // Link offset d6
-      // Initialize gain matrices
+      // ---- Cartesian PD gains (position tracking stiffness) ----
       Kp_PD_ = 5.0 * Matrix3d::Identity();
       Kp_PD_ << 2.0, 0.0, 0.0,
                 0.0, 1.0, 0.0,
-                0.0, 0.0, 10.0;
+                0.0, 0.0, 10.0;  // Higher Z gain for better vertical tracking
       Kd_PD_ = 10.0 * Matrix3d::Identity();
+
+      // ---- Joint-space regularization gains (sliding variable) ----
       Kreg_PD_ = Matrix6d::Zero();
       Kreg_PD_.block<3, 3>(0, 0) = 40.0 * Matrix3d::Identity();
       Kreg_PD_.block<3, 3>(3, 3) = 5 * Matrix3d::Identity();
 
+      // ---- Cartesian-space regularization gains (operational space) ----
       Kreg_PD_cart_ = Matrix3d::Zero();
       Kreg_PD_cart_.block<3, 3>(0, 0) << 500, 0.0, 0.0,
                                         0.0, 500, 0.0,
                                         0.0, 0.0, 500;
-      // Kreg_PD_cart_.block<3, 3>(3, 3) = 5.0 * Matrix3d::Identity();
+      // ---- PID gains (not actively used, kept for future extension) ----
       Kp_PID_ = 5.0 * Matrix3d::Identity();
       Kd_PID_ = 5.0 * Matrix3d::Identity();
       Ki_PID_ = 5.0 * Matrix3d::Identity();
@@ -57,17 +100,21 @@ namespace tum_ics_ur_robot_lli
       weld_traj_max_points_ = 2000;
       weld_path_idx_ = 0;
 
-      // Initialize time parameters (matching Python)
-      t_INIT_ = 15.0;    // Was 5.0, Python uses 10.0
-      t_LINEAR_ = 15.0;
-      t_TRACK_SLOW_ = 20.0;
-      t_TRACK_FAST_ = 20.0;  // Match Python's 40s
-      q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0; // Starting pose for trajectory
+      // ---- Trajectory phase durations (seconds) ----
+      t_INIT_ = 15.0;    // Time to move from starting pose to non-singular config
+      t_LINEAR_ = 15.0;  // Time for Cartesian linear motion to tracking start
+      t_TRACK_SLOW_ = 20.0;  // Time to follow the weld path slowly (with admittance)
+      t_TRACK_FAST_ = 20.0;  // Time for fast tracking phase
+
+      // Starting joint pose for trajectory (all joints at their home offsets)
+      q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0;
       
       
-      // Initialize poses
+      // ---- Key robot configurations ----
+      // start_track_pose_: joint config whose FK defines the initial weld approach point
       start_track_pose_ << 0.0, -M_PI / 3.0, -M_PI + M_PI / 2.0, 0, 0.0, 0.0;
-      non_singular_pose_ << 0.0, -M_PI / 2.0, -M_PI / 2, -M_PI / 2, M_PI / 2, 0.0;  // Match Python
+      // non_singular_pose_: elbow-up config that avoids kinematic singularities
+      non_singular_pose_ << 0.0, -M_PI / 2.0, -M_PI / 2, -M_PI / 2, M_PI / 2, 0.0;
       // test good starting pose for following linear motion: 0, -90, -90, -90, 90, 0;
       //non_singular_pose_ << 0, -M_PI/2, -M_PI/2, -M_PI/2, M_PI/2, 0;
       
@@ -110,20 +157,39 @@ namespace tum_ics_ur_robot_lli
     {
     }
 
-    // Setters for initial, home, and park configurations (same as for simple effort controller)
+    /**
+     * @brief Set the initial joint configuration reported by the robot driver.
+     * @param q_init  Joint state at controller startup.
+     */
     void OperationalSpaceController6DOF::setQInit(const JointState &q_init)
     {
       q_init_ = q_init;
     }
+    /**
+     * @brief Set the home joint configuration (nominal operating pose).
+     */
     void OperationalSpaceController6DOF::setQHome(const JointState &q_home)
     {
       q_home_ = q_home;
     }
+
+    /**
+     * @brief Set the park joint configuration (safe resting pose).
+     */
     void OperationalSpaceController6DOF::setQPark(const JointState &q_park)
     {
       q_park_ = q_park;
     }
     
+    /**
+     * @brief One-time initialization called before the control loop starts.
+     *
+     * Loads the UR10 dynamics model, reads PD/PID gains and timing
+     * parameters from the ROS parameter server, and optionally initializes
+     * the admittance filter if enabled.
+     *
+     * @return true on success, false if the dynamics model fails to load.
+     */
     bool OperationalSpaceController6DOF::init()
     {
       ROS_WARN_STREAM("OperationalSpaceController6DOF::init");
@@ -191,11 +257,32 @@ namespace tum_ics_ur_robot_lli
 
       return true;
     }
+    /**
+     * @brief Called once when the controller is activated.
+     * @return Always true (no special start-up logic required).
+     */
     bool OperationalSpaceController6DOF::start()
     {
       ROS_WARN_STREAM("OperationalSpaceController6DOF::start");
       return true;
     }
+
+    /**
+     * @brief Main control loop callback — executed every control cycle (~500 Hz).
+     *
+     * Workflow per cycle:
+     *   1. First-iteration bookkeeping (record start config, compute initial FK).
+     *   2. Update current joint & Cartesian state.
+     *   3. Advance the state machine based on elapsed time.
+     *   4. Check for kinematic singularities; fall back to joint space if needed.
+     *   5. Generate the desired trajectory for the current state.
+     *   6. Compute joint torques via the active controller (joint or Cartesian).
+     *   7. Publish visualization & debug data.
+     *
+     * @param time   Current robot timestamp.
+     * @param state  Measured joint positions, velocities, and accelerations.
+     * @return       6-DOF joint torque command vector.
+     */
     Vector6d OperationalSpaceController6DOF::update(const RobotTime &time, const JointState &state)
     {
       JointState state_adj = state;
@@ -214,7 +301,7 @@ namespace tum_ics_ur_robot_lli
         t0_ = time.tD();
         last_t_ = t0_;
         last_q_ = state_adj.q;
-        // Get initial Cartesian position using our FK
+        // Get initial Cartesian position using forward kinematics
         X_ = getEndEffectorPosition(state_adj.q);
         last_X_ = X_;
 
@@ -242,7 +329,7 @@ namespace tum_ics_ur_robot_lli
       // Update state machine
       updateStateMachine(t_elapsed);
 
-      // Check for singularity (manipulability)
+      // Singularity check: if manipulability is too low, fall back to joint space
       if (control_space_ == ControlSpace::CARTESIAN)
       {
         Eigen::Matrix<double, 6, 6> J = computeJacobian(state_adj.q);
@@ -302,6 +389,7 @@ namespace tum_ics_ur_robot_lli
                     static_cast<float>(xdot_current(1)), 
                     static_cast<float>(xdot_current(2))};
       cartesian_pub_.publish(x_msg);
+      // ---- Compute joint torques based on the active control space ----
       if (control_space_ == ControlSpace::JOINT) //JOINT
       {
         tau = jointSpaceController(state_adj, q_des, qdot_des, qddot_des, dt);
@@ -338,12 +426,30 @@ namespace tum_ics_ur_robot_lli
       return tau;
     }
 
+    /**
+     * @brief Called once when the controller is deactivated.
+     * @return Always true.
+     */
     bool OperationalSpaceController6DOF::stop()
     {
       ROS_WARN_STREAM("OperationalSpaceController6DOF::stop");
       return true;
     }
 
+    /**
+     * @brief Advance the finite state machine based on elapsed time.
+     *
+     * State transitions (all time-based):
+     *   INIT        -> LINEAR      after t_INIT_      (joint-space move to non-singular config)
+     *   LINEAR      -> TRACK_SLOW  after t_LINEAR_     (Cartesian linear move to track start)
+     *   TRACK_SLOW  -> TRACK_FAST  after t_TRACK_SLOW_ (slow weld-path following with admittance)
+     *   TRACK_FAST  -> END         after t_TRACK_FAST_ (fast tracking / circular motion)
+     *
+     * On each transition the control space is switched, and the current
+     * joint/Cartesian state is latched as the new interpolation origin.
+     *
+     * @param t_elapsed  Seconds since the controller was first activated.
+     */
     void OperationalSpaceController6DOF::updateStateMachine(double t_elapsed)
     {
       State new_state = current_state_;
@@ -395,6 +501,28 @@ namespace tum_ics_ur_robot_lli
         last_q_ = q_;
       }
     }
+    /**
+     * @brief Generate the desired trajectory (joint & Cartesian) for the current state.
+     *
+     * Depending on the active state, this fills in either joint-space or
+     * Cartesian-space setpoints:
+     *   - INIT:       Linear interpolation in joint space toward non_singular_pose_.
+     *   - LINEAR:     Linear interpolation in Cartesian space toward the
+     *                 tracking start position (first weld-path waypoint or a
+     *                 fixed default).
+     *   - TRACK_SLOW: Segment-wise linear interpolation along the subscribed
+     *                 weld path (`/weld_line_vision/weld_path`).
+     *   - TRACK_FAST: (Placeholder) Fast circular / hold motion.
+     *   - END:        Hold nearest equivalent of non_singular_pose_.
+     *
+     * @param[in]  t          Absolute controller time.
+     * @param[out] q_des      Desired joint position (used in joint-space modes).
+     * @param[out] qdot_des   Desired joint velocity.
+     * @param[out] qddot_des  Desired joint acceleration.
+     * @param[out] x_des      Desired Cartesian position (used in Cartesian modes).
+     * @param[out] xdot_des   Desired Cartesian velocity.
+     * @param[out] xddot_des  Desired Cartesian acceleration.
+     */
     void OperationalSpaceController6DOF::generateTrajectory(double t,
                                                             Vector6d &q_des, Vector6d &qdot_des, Vector6d &qddot_des,
                                                             Vector3d &x_des, Vector3d &xdot_des, Vector3d &xddot_des)
@@ -526,7 +654,26 @@ namespace tum_ics_ur_robot_lli
         break;
       }
     }
-    // this one should normally come from the adaptive controller, but 
+    /**
+     * @brief Joint-space PD controller with sliding-variable formulation.
+     *
+     * Computes a torque command using a sliding variable S = qdot - qr_dot,
+     * where qr_dot = qdot_des - Kp * (q - q_des). The control law is:
+     *
+     *     tau = -Kreg * S
+     *
+     * This is equivalent to a PD controller on joint error and can be
+     * extended to regressor-based adaptive control.
+     *
+     * @param state     Current joint state (position, velocity).
+     * @param q_des     Desired joint position.
+     * @param qdot_des  Desired joint velocity.
+     * @param qddot_des Desired joint acceleration (unused in pure PD).
+     * @param dt        Control loop timestep [s].
+     * @return          6-DOF joint torque command.
+     */
+    // NOTE: this could be replaced by the adaptive controller from
+    // the regressor-based approach, but PD works well for now.
     Vector6d OperationalSpaceController6DOF::jointSpaceController(const JointState &state,
                                                                    const Vector6d &q_des,
                                                                    const Vector6d &qdot_des,
@@ -552,6 +699,29 @@ namespace tum_ics_ur_robot_lli
       tau = -Kreg_PD_ * S_q;
       return tau;
     }
+    /**
+     * @brief Operational (Cartesian) space controller with optional admittance.
+     *
+     * Control pipeline:
+     *   1. If admittance is enabled, the desired trajectory is modified by
+     *      the admittance filter output: x_des += x_admittance (force compliance).
+     *   2. Cartesian errors (position & velocity) are computed.
+     *   3. A reference Cartesian velocity is formed:  xr_dot = xdot_des - Kp * e_x.
+     *   4. The reference is mapped to joint space via the Jacobian pseudo-inverse.
+     *   5. A joint-space sliding variable S = qdot - qr_dot is used to compute
+     *      the control torque:  tau = -Kreg * S.
+     *   6. Joints 4 & 5 use independent orientation-holding PD terms.
+     *   7. A model-based feedforward term (M*qddot_r + C*qdot_r + g) is added.
+     *
+     * @param state        Current joint state.
+     * @param x_current    Current end-effector position in world frame [3x1].
+     * @param xdot_current Current end-effector linear velocity [3x1].
+     * @param x_des        Desired end-effector position [3x1].
+     * @param xdot_des     Desired end-effector velocity [3x1].
+     * @param xddot_des    Desired end-effector acceleration [3x1].
+     * @param dt           Control loop timestep [s].
+     * @return             6-DOF joint torque command.
+     */
     Vector6d OperationalSpaceController6DOF::cartesianSpaceController(const JointState &state,
                                                                        const Vector3d &x_current,
                                                                        const Vector3d &xdot_current,
@@ -665,7 +835,8 @@ namespace tum_ics_ur_robot_lli
 
       Eigen::Matrix<double,6,6> Jdot_ee_w  = computeJacobianDotTranslational(state.q, state.qp);
       Eigen::Matrix<double, 3, 3> Jdot_ee_w_translation = Jdot_ee_w.block<3, 3>(0, 0); // Get translational part of Jacobian derivative in world frame
-      //PD controller seems to be correctly
+      // ---- Selection matrix: only first 3 joints get Cartesian torque ----
+      //      Joints 4-6 are handled separately for orientation control.
       Eigen::Matrix<double, 6, 6> selectionMatrix = Matrix6d::Zero();
       selectionMatrix << 1, 0, 0, 0, 0, 0,
                           0, 1, 0, 0, 0, 0,
@@ -701,9 +872,12 @@ namespace tum_ics_ur_robot_lli
         joint_states_des_pub_.publish(x_des_msg);
 
         tau.head(3) = -Kreg_PD_cart_ * S_q ;
+        // Joint 4: orientation control to keep end-effector pointing down
         tau(3) = jointControl(state.q, 50);
+        // Joint 5: simple P-control to hold at 90° (tool vertical)
         tau(4) = (M_PI/2 - state.q(4)) * 10;
-        tau += selectionMatrix * computeReferenceTorques(state.q, state.qp, qrdot, qrddot); // Add feedforward term based on desired trajectory
+        // Add inverse-dynamics feedforward for the first 3 joints
+        tau += selectionMatrix * computeReferenceTorques(state.q, state.qp, qrdot, qrddot);
       }
       else if (controller_type_ == ControllerType::PID)
       {
@@ -718,6 +892,16 @@ namespace tum_ics_ur_robot_lli
       cartesian_pub_.publish(x_msg);
       return tau;
     }
+    /**
+     * @brief Map a reference joint vector to the closest 2π-equivalent of the current joints.
+     *
+     * Prevents large discontinuous jumps when the desired angle and current
+     * angle differ by multiples of 2π (e.g., 0 vs. 2π).
+     *
+     * @param q_ref     Target / reference joint angles.
+     * @param q_current Current measured joint angles.
+     * @return          Adjusted reference angles within one period of q_current.
+     */
     Vector6d OperationalSpaceController6DOF::closestEquivalentAngles(const Vector6d &q_ref, 
                                                                       const Vector6d &q_current)
     {
@@ -728,6 +912,16 @@ namespace tum_ics_ur_robot_lli
       }
       return result;
     }
+    /**
+     * @brief Damped pseudo-inverse of an arbitrary matrix using SVD.
+     *
+     * Singular values below `tolerance` are treated as zero to avoid
+     * numerical blow-up near singularities.
+     *
+     * @param matrix    Input matrix to invert.
+     * @param tolerance Threshold below which singular values are zeroed.
+     * @return          Pseudo-inverse of the input matrix.
+     */
     Eigen::MatrixXd OperationalSpaceController6DOF::pseudoInverse(const Eigen::MatrixXd &matrix, 
                                                                    double tolerance)
     {
@@ -751,6 +945,15 @@ namespace tum_ics_ur_robot_lli
 
       return svd.matrixV() * singularValuesInv * svd.matrixU().transpose();
     }
+    /**
+     * @brief Compute the Yoshikawa manipulability measure.
+     *
+     * w = sqrt(|det(J * J^T)|). A value close to zero indicates the
+     * manipulator is near a kinematic singularity.
+     *
+     * @param J  6x6 Jacobian matrix.
+     * @return   Scalar manipulability index (>= 0).
+     */
     double OperationalSpaceController6DOF::computeManipulability(const Eigen::Matrix<double, 6, 6> &J)
     {
       // Yoshikawa manipulability measure: w = sqrt(det(J * J^T))
@@ -761,7 +964,17 @@ namespace tum_ics_ur_robot_lli
     // =========================================================================
     // Self-contained UR10 Kinematics Functions
     // =========================================================================
-    
+
+    /**
+     * @brief Compute the 6x6 geometric Jacobian in the world frame.
+     *
+     * Uses the UR10 model to get J in the base (0) frame, then rotates it
+     * into the world frame via the fixed transform T_0_w (180° rotation
+     * about Z, i.e., X and Y axes are negated).
+     *
+     * @param q  Current joint configuration [6x1].
+     * @return   6x6 Jacobian [linear; angular] expressed in world frame.
+     */
     Eigen::Matrix<double, 6, 6> OperationalSpaceController6DOF::computeJacobian(const Vector6d &q)
     {
       // Get Jacobian directly from ur_model (no numerical differentiation needed)
@@ -782,6 +995,16 @@ namespace tum_ics_ur_robot_lli
       Eigen::Matrix<double,6,6> J_ef_w = Rotation_0_w * J_ef_0; // Transform to world frame
       return J_ef_w;
     }
+    /**
+     * @brief Compute the time-derivative of the Jacobian (J_dot) in world frame.
+     *
+     * Needed for the feedforward acceleration term in Cartesian control:
+     *   x_ddot = J * q_ddot + J_dot * q_dot
+     *
+     * @param q   Current joint positions [6x1].
+     * @param qp  Current joint velocities [6x1].
+     * @return    6x6 J_dot in world frame.
+     */
     Eigen::Matrix<double, 6, 6> OperationalSpaceController6DOF::computeJacobianDotTranslational(const Vector6d &q, const Vector6d &qp)
     {
       Eigen::Matrix<double, 6, 6> Jp_ef_0 = model_.Jp_ef_0(q, qp); 
@@ -800,6 +1023,15 @@ namespace tum_ics_ur_robot_lli
       return Jp_ef_w;
     }
 
+    /**
+     * @brief Forward kinematics — compute end-effector position in world frame.
+     *
+     * Obtains T_ef_0 from the UR model and left-multiplies by T_0_w to
+     * express the result in the world frame.
+     *
+     * @param q  Joint configuration [6x1].
+     * @return   3D position of the end-effector flange in world frame.
+     */
     Vector3d OperationalSpaceController6DOF::getEndEffectorPosition(const Vector6d &q)
     {
       //copied T_0_w from ur_model aka python version
@@ -817,6 +1049,18 @@ namespace tum_ics_ur_robot_lli
       return T_ef_w.block<3,1>(0,3);
     }
 
+    /**
+     * @brief Publish a static identity-rotation TF transform for RViz.
+     *
+     * Useful for quickly visualizing a named frame at an arbitrary
+     * (x, y, z) location without building a full transform chain.
+     *
+     * @param parent  Parent frame ID (e.g., "world").
+     * @param child   Child frame ID  (e.g., "ee_link").
+     * @param x       X position [m].
+     * @param y       Y position [m].
+     * @param z       Z position [m].
+     */
     void OperationalSpaceController6DOF::publishTF_raw(const std::string& parent,
                    const std::string& child,
                    double x, double y, double z)
@@ -838,6 +1082,15 @@ namespace tum_ics_ur_robot_lli
         tf_pub_.publish(msg);
     }
 
+    /**
+     * @brief Compute end-effector linear velocity in world frame.
+     *
+     * v_ee = J(q) * q_dot  (only the top 3 rows — translational part).
+     *
+     * @param q   Joint positions [6x1].
+     * @param qp  Joint velocities [6x1].
+     * @return    3D linear velocity of the end-effector in world frame.
+     */
     Vector3d OperationalSpaceController6DOF::getEndEffectorVelocity(const Vector6d &q, const Vector6d &qp)
     {
       Eigen::Matrix<double, 6, 6> J = computeJacobian(q);
@@ -845,6 +1098,19 @@ namespace tum_ics_ur_robot_lli
       return V_ee_w.block<3, 1>(0, 0); // 0,0 for linear velocity -> had here 3,0 before!!!
     }
 
+    /**
+     * @brief Compute the regressor-based torque estimate  Y(q, qdot, qr_dot, qr_ddot) * theta.
+     *
+     * Uses the UR model's regressor matrix and an initial parameter guess
+     * to produce a model-based feedforward torque.  Intended for use in
+     * adaptive control schemes where theta is updated online.
+     *
+     * @param q       Joint positions.
+     * @param qdot    Joint velocities.
+     * @param qrdot   Reference joint velocities.
+     * @param qrddot  Reference joint accelerations.
+     * @return        6-DOF estimated torque from the regressor.
+     */
     Vector6d OperationalSpaceController6DOF::computeYr_theta(const Vector6d& q, const Vector6d& qdot, const Vector6d& qrdot, const Vector6d& qrddot)
     {
       // Initalize the robot regressor matrix
@@ -856,10 +1122,35 @@ namespace tum_ics_ur_robot_lli
       return Yr_theta;
     }
 
+    /**
+     * @brief Compute model-based reference torques (inverse dynamics feedforward).
+     *
+     * tau_ff = M(q) * qdot_r_dot + C(q, qdot) * qdot_r + g(q)
+     *
+     * Provides gravity, Coriolis and inertial compensation for the
+     * desired reference trajectory, improving tracking accuracy.
+     *
+     * @param q       Joint positions.
+     * @param qdot    Joint velocities.
+     * @param qdotr   Reference joint velocities.
+     * @param qddotr  Reference joint accelerations.
+     * @return        6-DOF feedforward torque.
+     */
     Vector6d OperationalSpaceController6DOF::computeReferenceTorques(const Vector6d &q, const Vector6d &qdot, Vector6d &qdotr, Vector6d &qddotr)
     {
       return model_.inertiaMatrix(q) * qddotr + model_.centripetalMatrix(q, qdot) * qdotr + model_.gravityVector(q);
     }
+    /**
+     * @brief Simple proportional orientation controller for joint 4 (wrist).
+     *
+     * Computes a torque to align the tool’s local X-axis with the world
+     * Z-axis, producing a downward-pointing end-effector orientation
+     * suitable for welding / drawing tasks.
+     *
+     * @param q     Current joint positions.
+     * @param gain  Proportional gain.
+     * @return      Scalar torque for joint 4.
+     */
     double OperationalSpaceController6DOF::jointControl(const Vector6d &q, double gain) 
     {
       Vector3d z;
@@ -872,6 +1163,16 @@ namespace tum_ics_ur_robot_lli
       return -dot * gain;
     }
     
+    /**
+     * @brief ROS callback for the weld-path topic (`/weld_line_vision/weld_path`).
+     *
+     * Receives a nav_msgs::Path from the vision system, transforms each
+     * pose from the camera/workspace frame into the robot world frame,
+     * and stores it for trajectory generation in TRACK_SLOW state.
+     * Automatically unsubscribes after the first valid path is received.
+     *
+     * @param msg  Incoming Path message from the weld-line vision node.
+     */
     void OperationalSpaceController6DOF::weldPathCallback(const nav_msgs::Path::ConstPtr& msg)
     {      ROS_INFO_STREAM("Received weld path with " << msg->poses.size() << " poses");
       if (msg->poses.empty())
@@ -882,7 +1183,8 @@ namespace tum_ics_ur_robot_lli
       // Store path in global variable for trajectory generation and visualization
       weld_traj_path_msg_ = *msg;
 
-      // transform all poses from workspace frame to world frame
+      // Transform all poses from camera/workspace frame to robot world frame.
+      // The mapping accounts for the physical offset between camera and base.
       for (size_t i = 0; i < weld_traj_path_msg_.poses.size(); i++)
       {
         geometry_msgs::PoseStamped& ps = weld_traj_path_msg_.poses[i];

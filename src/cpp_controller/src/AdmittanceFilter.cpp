@@ -1,9 +1,33 @@
+/**
+ * @file AdmittanceFilter.cpp
+ * @brief Implementation of the AdmittanceFilter class for compliant force/position control.
+ *
+ * Implements a 3-axis admittance controller that converts measured external forces
+ * into Cartesian position offsets using a virtual mass-spring-damper model:
+ *
+ *     M * (x_ddot + G) + D * x_dot + K * x = F_error
+ *
+ * Each axis can independently operate in FORCE or POSITION mode, enabling
+ * hybrid force/position control (e.g., compliant Z-axis for surface contact
+ * with stiff X/Y axes for trajectory tracking).
+ */
+
 #include <tum_ics_ur10_controller_tutorial/AdmittanceFilter.h>
 #include <algorithm>
 
 namespace tum_ics_ur_robot_lli
 {
 
+/**
+ * @brief Constructs the AdmittanceFilter and subscribes to the force/torque sensor topic.
+ *
+ * Initializes default admittance parameters tuned for end-effector drawing:
+ * - X/Y axes: stiff (position control mode)
+ * - Z axis: compliant (force control mode) with 3N desired force
+ *
+ * @param nh  ROS NodeHandle for subscriptions and parameter access.
+ * @param ft_topic  Name of the geometry_msgs::WrenchStamped topic from the FT sensor.
+ */
 AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_topic)
     : nh_(nh),
       sensor_connected_(false),
@@ -38,6 +62,16 @@ AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_to
   ROS_INFO_STREAM("AdmittanceFilter: Subscribing to " << ft_topic);
 }
 
+/**
+ * @brief Loads admittance parameters from the ROS parameter server.
+ *
+ * Reads optional parameters (mass, damping, stiffness, desired_force,
+ * max_offset, max_velocity) from the given namespace. Falls back to
+ * constructor defaults for any parameter not found.
+ *
+ * @param ns  ROS parameter namespace (e.g., "/admittance_filter").
+ * @return true on success (always returns true; missing params use defaults).
+ */
 bool AdmittanceFilter::init(const std::string& ns)
 {
   if (!ros::param::has(ns))
@@ -93,6 +127,12 @@ bool AdmittanceFilter::init(const std::string& ns)
   return true;
 }
 
+/**
+ * @brief Resets the filter state (position, velocity, acceleration offsets) to zero.
+ *
+ * Call this when transitioning between control phases to prevent
+ * residual offsets from carrying over.
+ */
 void AdmittanceFilter::reset()
 {
   x_.setZero();
@@ -101,6 +141,22 @@ void AdmittanceFilter::reset()
   ROS_INFO("AdmittanceFilter: State reset");
 }
 
+/**
+ * @brief Runs one admittance control cycle and returns the updated Cartesian position offset.
+ *
+ * Performs the following steps each cycle:
+ * 1. Reads the latest external force (thread-safe) and checks sensor timeout.
+ * 2. Validates the joint configuration for NaN values.
+ * 3. Transforms the external force from end-effector frame to world frame.
+ * 4. Computes force error: F_error = F_ext - F_desired.
+ * 5. Solves M*(x_ddot+G) + D*x_dot + K*x = F_error per axis (force or position mode).
+ * 6. Integrates acceleration -> velocity -> position via forward Euler.
+ * 7. Clamps velocity and position to safety limits.
+ *
+ * @param dt  Time step in seconds since the last call (rejected if <= 0 or > 0.1).
+ * @param q   Current joint positions used for forward kinematics (end-effector transform).
+ * @return    3D Cartesian position offset [m] to be added to the nominal trajectory.
+ */
 Vector3d AdmittanceFilter::update(double dt, const cc::JointPosition& q)
 {
   if (dt <= 0.0 || dt > 0.1)
@@ -268,6 +324,15 @@ Vector3d AdmittanceFilter::update(double dt, const cc::JointPosition& q)
   return x_;
 }
 
+/**
+ * @brief ROS callback for incoming force/torque sensor measurements.
+ *
+ * Stores the force and torque vectors from the WrenchStamped message
+ * and updates the sensor timestamp. Access is mutex-protected for
+ * thread safety with the real-time control loop.
+ *
+ * @param msg  Incoming WrenchStamped message from the FT sensor.
+ */
 void AdmittanceFilter::ftSensorCallback(const geometry_msgs::WrenchStamped::ConstPtr& msg)
 {
   std::lock_guard<std::mutex> lock(ft_mutex_);
@@ -284,6 +349,12 @@ void AdmittanceFilter::ftSensorCallback(const geometry_msgs::WrenchStamped::Cons
   sensor_connected_ = true;
 }
 
+/**
+ * @brief Sets the control mode (FORCE or POSITION) for a single Cartesian axis.
+ *
+ * @param axis  Axis index (0 = X, 1 = Y, 2 = Z).
+ * @param mode  Desired control mode (AxisMode::FORCE or AxisMode::POSITION).
+ */
 void AdmittanceFilter::setAxisMode(int axis, AxisMode mode)
 {
   if (axis >= 0 && axis < 3)
@@ -294,21 +365,43 @@ void AdmittanceFilter::setAxisMode(int axis, AxisMode mode)
   }
 }
 
+/**
+ * @brief Sets the virtual mass parameters for all three axes.
+ *
+ * @param M_d  Desired virtual mass vector [kg] (one value per axis).
+ */
 void AdmittanceFilter::setMass(const Vector3d& M_d)
 {
   M_d_ = M_d;
 }
 
+/**
+ * @brief Sets the virtual damping parameters for all three axes.
+ *
+ * @param D_d  Desired virtual damping vector [Ns/m] (one value per axis).
+ */
 void AdmittanceFilter::setDamping(const Vector3d& D_d)
 {
   D_d_ = D_d;
 }
 
+/**
+ * @brief Sets the virtual stiffness parameters for all three axes.
+ *
+ * @param K_d  Desired virtual stiffness vector [N/m] (one value per axis).
+ */
 void AdmittanceFilter::setStiffness(const Vector3d& K_d)
 {
   K_d_ = K_d;
 }
 
+/**
+ * @brief Returns the latest external force reading from the FT sensor.
+ *
+ * Thread-safe; acquires the FT mutex before reading.
+ *
+ * @return 3D force vector [N] in the end-effector frame.
+ */
 Vector3d AdmittanceFilter::getExternalForce() const
 {
   std::lock_guard<std::mutex> lock(ft_mutex_);
@@ -318,6 +411,11 @@ Vector3d AdmittanceFilter::getExternalForce() const
 // {
 //   return x_dot_;
 // }
+/**
+ * @brief Returns the current acceleration offset produced by the admittance filter.
+ *
+ * @return 3D acceleration offset vector [m/s^2].
+ */
 Vector3d AdmittanceFilter::getAccelerationOffset() const
 {
   return x_ddot_;
