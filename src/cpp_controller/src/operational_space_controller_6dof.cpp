@@ -59,7 +59,7 @@ namespace tum_ics_ur_robot_lli
 
       // Initialize time parameters (matching Python)
       t_INIT_ = 15.0;    // Was 5.0, Python uses 10.0
-      t_LINEAR_ = 20.0;
+      t_LINEAR_ = 15.0;
       t_TRACK_SLOW_ = 20.0;
       t_TRACK_FAST_ = 20.0;  // Match Python's 40s
       q0_ << 0.0, -M_PI / 2.0, 0.0, -M_PI / 2.0, 0, 0.0; // Starting pose for trajectory
@@ -372,6 +372,7 @@ namespace tum_ics_ur_robot_lli
         last_q_ = q_;
         last_X_ = X_;
         last_X_(2) -= admittance_filter_->update(0, last_q_)(2);
+        use_admittance_ = true;
       }
       else if (t_elapsed > t_INIT_ && current_state_ == State::INIT)
       {
@@ -380,6 +381,7 @@ namespace tum_ics_ur_robot_lli
         last_t_ = ros::Time::now().toSec();
         last_q_ = q_;
         last_X_ = X_;
+        use_admittance_ = false;
       }
 
       // If state changed, update transition variables
@@ -407,15 +409,15 @@ namespace tum_ics_ur_robot_lli
       // Get track position in Cartesian space (compute FK for start_track_pose_)
       Vector3d track_pos_cartesian = getEndEffectorPosition(start_track_pose_);
       // end effector height = 49-20 = 29cm, difference between base and tabel = table 8cm lower
-      track_pos_cartesian << -0.65, 0.0, 0.29-0.09-0.045; // Override with fixed position for testing
+      track_pos_cartesian << -0.65, 0.0, 0.405; // Override with fixed position for testing
       // set first waypoint of weld path to track_pos_cartesian 
       if (!weld_traj_path_msg_.poses.empty())
       {
         track_pos_cartesian << weld_traj_path_msg_.poses[0].pose.position.x, 
                               weld_traj_path_msg_.poses[0].pose.position.y, 
-                              0.45;//weld_traj_path_msg_.poses[0].pose.position.z;
+                              0.405;//weld_traj_path_msg_.poses[0].pose.position.z;
       }
-      double omega = 2.0 * M_PI / t_TRACK_SLOW_;
+      double omega = 2.0 * M_PI / t_TRACK_SLOW_;  
       double omega_z = omega * 15.0;
       double omega_fast = 2.0 * M_PI / t_TRACK_FAST_;
       double omega_z_fast = omega_fast * 15.0;

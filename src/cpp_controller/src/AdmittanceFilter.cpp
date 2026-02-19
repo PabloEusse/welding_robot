@@ -21,9 +21,9 @@ AdmittanceFilter::AdmittanceFilter(ros::NodeHandle& nh, const std::string& ft_to
   // Z-axis: compliant for force control
   // X,Y: stiff (position control mode by default)
   M_d_ << 0.0, 0.0, 20;    // Virtual mass [kg]
-  D_d_ << 1000.0, 1000.0, 200.0;  // Virtual damping [Ns/m] - with 60 = xddot_offset = 2.3683 at state transition, with 70 = 10^-6
+  D_d_ << 1000.0, 1000.0, 350.0;  // Virtual damping [Ns/m] - with 60 = xddot_offset = 2.3683 at state transition, with 70 = 10^-6
   K_d_ << 5.0, 5.0, 15;    // Virtual stiffness [N/m] - 0 for pure force tracking - activate for testing
-  G_ = 0.1;
+  G_ = 0.15;
   //ROS_WARN_STREAM("G_" << G_);
   // Default: X,Y position control, Z force control
   axis_modes_ = {AxisMode::POSITION, AxisMode::POSITION, AxisMode::FORCE};
@@ -196,7 +196,7 @@ Vector3d AdmittanceFilter::update(double dt, const cc::JointPosition& q)
       // Force control via admittance
       if (M_d_(i) > 0.0)
       {
-        x_ddot(i) = -G_ + (F_ext(i) - D_d_(i) * x_dot_(i)) / M_d_(i);//(F_error(i) - D_d_(i) * x_dot_(i) - K_d_(i) * x_(i)) / M_d_(i);
+        x_ddot(i) = -G_ + (std::abs(F_ext(i)) - D_d_(i) * x_dot_(i)) / M_d_(i);//(F_error(i) - D_d_(i) * x_dot_(i) - K_d_(i) * x_(i)) / M_d_(i);
       }
       else
       {
